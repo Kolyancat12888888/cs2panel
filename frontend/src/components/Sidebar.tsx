@@ -3,7 +3,19 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Server, Cpu, ShoppingBag, Map, ShieldAlert, LifeBuoy, FileText, Settings, LayoutDashboard } from 'lucide-react';
+import { 
+  Server, 
+  Cpu, 
+  ShoppingBag, 
+  ShieldAlert, 
+  LifeBuoy, 
+  FileText, 
+  Settings, 
+  LayoutDashboard,
+  Code2,
+  Bot,
+  Trophy
+} from 'lucide-react';
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -11,6 +23,9 @@ export default function Sidebar() {
   const navItems = [
     { label: 'Overview', href: '/', icon: LayoutDashboard },
     { label: 'Game Servers', href: '/servers', icon: Server },
+    { label: 'Visual Plugin Studio', href: '/studio', icon: Code2, badge: 'PRO' },
+    { label: 'Client AI Agents', href: '/agents', icon: Bot, badge: 'Local SDK' },
+    { label: 'Match & Tournaments', href: '/matches', icon: Trophy },
     { label: 'Node Cluster', href: '/nodes', icon: Cpu },
     { label: 'Marketplace', href: '/plugins', icon: ShoppingBag },
     { label: 'Support Tickets', href: '/tickets', icon: LifeBuoy },
@@ -31,14 +46,23 @@ export default function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
+              className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition ${
                 isActive
                   ? 'bg-cs2-orange text-black font-semibold shadow-lg shadow-cs2-orange/10'
                   : 'text-cs2-muted hover:text-white hover:bg-cs2-card'
               }`}
             >
-              <Icon className="w-4 h-4" />
-              <span>{item.label}</span>
+              <div className="flex items-center gap-3">
+                <Icon className="w-4 h-4" />
+                <span>{item.label}</span>
+              </div>
+              {item.badge && (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wide ${
+                  isActive ? 'bg-black text-cs2-orange' : 'bg-cs2-orange/20 text-cs2-orange'
+                }`}>
+                  {item.badge}
+                </span>
+              )}
             </Link>
           );
         })}

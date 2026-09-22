@@ -16,6 +16,10 @@ use App\Http\Controllers\Api\TicketController;
 use App\Http\Controllers\Api\ActivityLogController;
 use App\Http\Controllers\Api\FileManagerController;
 use App\Http\Controllers\Api\PlayerStatsController;
+use App\Http\Controllers\Api\AgentGatewayController;
+use App\Http\Controllers\Api\PluginStudioController;
+use App\Http\Controllers\Api\JobController;
+use App\Http\Controllers\Api\MatchManagerController;
 
 /*
 |--------------------------------------------------------------------------
@@ -23,11 +27,18 @@ use App\Http\Controllers\Api\PlayerStatsController;
 |--------------------------------------------------------------------------
 */
 
-// Public Authentication
+// Public Authentication & Outbound Agent Gateway
 Route::prefix('v1/auth')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/steam', [AuthController::class, 'steamLogin']);
+});
+
+// Outbound Agent Gateway (Called by Client AI Agent)
+Route::prefix('v1/agent-gateway')->group(function () {
+    Route::post('/register', [AgentGatewayController::class, 'register']);
+    Route::post('/heartbeat', [AgentGatewayController::class, 'heartbeat']);
+    Route::post('/submit-result', [AgentGatewayController::class, 'submitJobResult']);
 });
 
 // Protected API Routes
@@ -36,7 +47,31 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
 
-    // Nodes (Admin / Overview)
+    // Connected Client AI Agents
+    Route::get('/agents', [AgentGatewayController::class, 'listAgents']);
+
+    // Visual Plugin Studio (.cs2graph Node Editor)
+    Route::get('/studio/projects', [PluginStudioController::class, 'index']);
+    Route::post('/studio/projects', [PluginStudioController::class, 'store']);
+    Route::get('/studio/projects/{id}', [PluginStudioController::class, 'show']);
+    Route::put('/studio/projects/{id}', [PluginStudioController::class, 'update']);
+    Route::post('/studio/ai-generate', [PluginStudioController::class, 'generateAiNodes']);
+    Route::post('/studio/projects/{id}/build', [PluginStudioController::class, 'dispatchBuild']);
+    Route::post('/studio/projects/{id}/deploy', [PluginStudioController::class, 'deployToServer']);
+
+    // Universal Bi-Directional Job Engine
+    Route::get('/jobs', [JobController::class, 'index']);
+    Route::get('/jobs/{uuid}', [JobController::class, 'show']);
+    Route::post('/jobs/{uuid}/cancel', [JobController::class, 'cancel']);
+
+    // Match Manager (BO1/BO3/BO5, Knife, Pauses, Demos)
+    Route::get('/matches', [MatchManagerController::class, 'index']);
+    Route::post('/matches', [MatchManagerController::class, 'store']);
+    Route::post('/matches/{id}/knife', [MatchManagerController::class, 'startKnife']);
+    Route::post('/matches/{id}/pause', [MatchManagerController::class, 'pause']);
+    Route::post('/matches/{id}/unpause', [MatchManagerController::class, 'unpause']);
+
+    // Nodes (Admin / Cluster Overview)
     Route::get('/nodes', [NodeController::class, 'index']);
     Route::post('/nodes', [NodeController::class, 'store']);
     Route::get('/nodes/{id}/benchmark', [NodeController::class, 'benchmark']);
@@ -60,7 +95,7 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     Route::get('/servers/{id}/files/read', [FileManagerController::class, 'read']);
     Route::post('/servers/{id}/files/write', [FileManagerController::class, 'write']);
 
-    // Plugins & Addons Marketplace
+    // Plugins Marketplace
     Route::get('/plugins', [PluginController::class, 'index']);
     Route::post('/plugins', [PluginController::class, 'store']);
     Route::post('/servers/{id}/plugins/{pluginId}/install', [PluginController::class, 'install']);
