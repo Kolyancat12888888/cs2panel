@@ -31,7 +31,23 @@ type AgentConfig struct {
 	DotnetPath   string          `json:"dotnet_path,omitempty"`
 	GitPath      string          `json:"git_path,omitempty"`
 	LocalLLMURL  string          `json:"local_llm_url,omitempty"` // e.g. http://127.0.0.1:11434
+	LLMModel     string          `json:"llm_model,omitempty"`      // e.g. qwen3-14b-tools:latest
 	Capabilities map[string]bool `json:"capabilities"`
+}
+
+type OllamaGenerateRequest struct {
+	Model   string `json:"model"`
+	Prompt  string `json:"prompt"`
+	System  string `json:"system,omitempty"`
+	Format  string `json:"format,omitempty"`
+	Stream  bool   `json:"stream"`
+}
+
+type OllamaGenerateResponse struct {
+	Model     string `json:"model"`
+	Response  string `json:"response"`
+	Done      bool   `json:"done"`
+	TotalDuration int64 `json:"total_duration"`
 }
 
 type RegisterRequest struct {
@@ -292,15 +308,32 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Synthesize nodes & connections based on prompt
-	promptLower := strings.ToLower(job.Prompt)
-	result.Logs = append(result.Logs, "Analyzing CS2 game event triggers and hook contracts...")
-	result.Progress = 40
-
 	nodes := make([]map[string]interface{}, 0)
 	connections := make([]map[string]string, 0)
 
-	// Check for Spawn / Connect / AWP / Health / Guns / Public Server patterns
+	modelName := a.config.LLMModel
+	if modelName == "" {
+		modelName = "qwen3-14b-tools:latest"
+	}
+
+	llmURL := a.config.LocalLLMURL
+	if llmURL == "" {
+		llmURL = "http://127.0.0.1:11434"
+	}
+
+	result.Logs = append(result.Logs, fmt.Sprintf("Dispatching prompt to Neural LLM [%s] at %s...", modelName, llmURL))
+	llmNodes, llmConns, err := a.callLocalLLM(job.Prompt)
+	if err == nil && len(llmNodes) > 0 {
+		nodes = llmNodes
+		connections = llmConns
+		result.Logs = append(result.Logs, fmt.Sprintf("Neural LLM [%s] synthesized %d nodes and %d connections!", modelName, len(nodes), len(connections)))
+	} else {
+		if err != nil {
+			log.Printf("[CS2 AI Client] LLM notice (%s): %v. Using dynamic AST fallback.", modelName, err)
+			result.Logs = append(result.Logs, fmt.Sprintf("Ollama LLM [%s] unavailable (%v). Using local AST engine...", modelName, err))
+		}
+		// Dynamic AST Engine Fallback
+		promptLower := strings.ToLower(job.Prompt)
 	if strings.Contains(promptLower, "awp") || strings.Contains(promptLower, "заход") || strings.Contains(promptLower, "connect") || strings.Contains(promptLower, "spawn") || strings.Contains(promptLower, "спавн") || strings.Contains(promptLower, "первый") || strings.Contains(promptLower, "хп") || strings.Contains(promptLower, "120") {
 		// Event: Player Connect / Full Spawn
 		eventNodeID := "ai_event_spawn_" + fmt.Sprintf("%x", time.Now().UnixNano())[:8]
@@ -600,6 +633,7 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 			map[string]string{"id": "c_cmd_2", "fromNodeId": cmdNodeID, "fromPortId": "caller", "toNodeId": actionNodeID, "toPortId": "player"},
 		)
 	}
+	}
 
 	result.Progress = 80
 	result.Logs = append(result.Logs, fmt.Sprintf("Synthesized %d CS2 graph nodes and %d connected logic wires.", len(nodes), len(connections)))
@@ -622,6 +656,96 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 
 	log.Printf("[CS2 AI Client] ✓ Background AI Node generation completed. Sending result to Central Gateway.")
 	a.sendJobResult(result)
+}
+
+func (a *ClientAgent) callLocalLLM(prompt string) ([]map[string]interface{}, []map[string]string, error) {
+	llmURL := a.config.LocalLLMURL
+	if llmURL == "" {
+		llmURL = "http://127.0.0.1:11434"
+	}
+	modelName := a.config.LLMModel
+	if modelName == "" {
+		modelName = "qwen3-14b-tools:latest"
+	}
+
+	endpoint := strings.TrimRight(llmURL, "/") + "/api/generate"
+	sysPrompt := `You are an expert Counter-Strike 2 Visual Node Graph AI Synthesizer.
+Convert user natural language into a valid connected graph of nodes.
+Output ONLY a raw JSON object with "nodes" and "connections". No markdown, no conversational text.
+JSON Schema:
+{
+  "nodes": [
+    {
+      "id": "node_unique_id",
+      "type": "event.player_spawn",
+      "category": "Events",
+      "title": "Event: Player Spawn",
+      "x": 120,
+      "y": 140,
+      "color": "border-emerald-500 bg-emerald-950/40 text-emerald-400",
+      "inputs": [],
+      "outputs": [{"id": "flow_out", "label": "Exec", "type": "flow"}, {"id": "player", "label": "Player", "type": "player"}],
+      "properties": {}
+    }
+  ],
+  "connections": [
+    {
+      "id": "c_1",
+      "fromNodeId": "node_unique_id",
+      "fromPortId": "flow_out",
+      "toNodeId": "node_target_id",
+      "toPortId": "flow_in"
+    }
+  ]
+}
+Available CS2 Node Types:
+- Events: event.player_spawn, event.player_connect_full, event.player_death, event.round_start, command.register
+- Conditions: condition.branch, condition.has_permission, condition.is_headshot
+- Actions: player.give_health, player.give_weapon, player.set_speed, player.set_gravity, player.give_money, player.teleport
+- HUD: hud.print_center_html, hud.print_chat, hud.play_sound`
+
+	reqBody := OllamaGenerateRequest{
+		Model:  modelName,
+		System: sysPrompt,
+		Prompt: prompt,
+		Format: "json",
+		Stream: false,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	client := &http.Client{Timeout: 90 * time.Second}
+	resp, err := client.Post(endpoint, "application/json", bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("Ollama returned HTTP status %d", resp.StatusCode)
+	}
+
+	var ollamaResp OllamaGenerateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+		return nil, nil, err
+	}
+
+	var parsed struct {
+		Nodes       []map[string]interface{} `json:"nodes"`
+		Connections []map[string]string      `json:"connections"`
+	}
+	if err := json.Unmarshal([]byte(ollamaResp.Response), &parsed); err != nil {
+		return nil, nil, err
+	}
+
+	if len(parsed.Nodes) == 0 {
+		return nil, nil, fmt.Errorf("LLM returned 0 nodes")
+	}
+
+	return parsed.Nodes, parsed.Connections, nil
 }
 
 func (a *ClientAgent) processBuildJob(job *JobRequest) {
@@ -783,6 +907,12 @@ func main() {
 	}
 	if cfg.WorkspaceDir == "" {
 		cfg.WorkspaceDir = filepath.Join(homeDir, ".cs2panel", "agent_workspace")
+	}
+	if cfg.LocalLLMURL == "" {
+		cfg.LocalLLMURL = "http://127.0.0.1:11434"
+	}
+	if cfg.LLMModel == "" {
+		cfg.LLMModel = "qwen3-14b-tools:latest"
 	}
 
 	agent := NewClientAgent(cfg)
