@@ -9,7 +9,13 @@
         "guzzlehttp/guzzle": "^7.8",
         "laravel/framework": "^11.0",
         "laravel/sanctum": "^4.0",
-        "laravel/tinker": "^2.9"
+        "laravel/socialite": "^5.31",
+        "laravel/tinker": "^2.9",
+        "socialiteproviders/discord": "^4.2",
+        "socialiteproviders/github": "^4.1",
+        "socialiteproviders/google": "^4.1",
+        "socialiteproviders/steam": "^4.4",
+        "socialiteproviders/vkontakte": "^5.1"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

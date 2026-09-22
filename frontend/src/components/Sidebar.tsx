@@ -14,11 +14,16 @@ import {
   LayoutDashboard,
   Code2,
   Bot,
-  Trophy
+  Trophy,
+  LogIn,
+  Lock,
+  UserPlus
 } from 'lucide-react';
+import { useAuth } from '@/lib/AuthContext';
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { isAuthenticated, user } = useAuth();
 
   const navItems = [
     { label: 'Overview', href: '/', icon: LayoutDashboard },
@@ -32,6 +37,50 @@ export default function Sidebar() {
     { label: 'Audit Logs', href: '/audit', icon: FileText },
     { label: 'System Settings', href: '/settings', icon: Settings },
   ];
+
+  if (!isAuthenticated) {
+    return (
+      <aside className="w-64 border-r border-cs2-border bg-cs2-surface flex flex-col justify-between p-4 min-h-[calc(100vh-4rem)]">
+        <div className="space-y-4">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-cs2-muted px-3">
+            Authentication Required
+          </div>
+
+          <div className="p-4 rounded-xl bg-cs2-card border border-cs2-border space-y-3">
+            <div className="w-8 h-8 rounded-lg bg-cs2-orange/10 border border-cs2-orange/30 text-cs2-orange flex items-center justify-center">
+              <Lock className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-white">Management Locked</div>
+              <p className="text-[11px] text-cs2-muted mt-1 leading-relaxed">
+                Log in or create an account to access game servers, visual studio and node clusters.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 pt-1">
+              <Link
+                href="/login"
+                className="w-full py-2 rounded-lg bg-cs2-orange text-black font-bold text-xs hover:bg-cs2-orangeHover transition flex items-center justify-center gap-1.5 shadow-md shadow-cs2-orange/20"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>Log In</span>
+              </Link>
+              <Link
+                href="/register"
+                className="w-full py-2 rounded-lg bg-cs2-surface border border-cs2-border text-white font-semibold text-xs hover:border-cs2-orange hover:text-cs2-orange transition flex items-center justify-center gap-1.5"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Register</span>
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-3 rounded-xl bg-cs2-card/30 border border-cs2-border text-[11px] text-cs2-muted text-center">
+          CS2Panel &bull; Shared Master v1.0.0
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <aside className="w-64 border-r border-cs2-border bg-cs2-surface flex flex-col justify-between p-4 min-h-[calc(100vh-4rem)]">
