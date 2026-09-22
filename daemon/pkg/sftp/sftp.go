@@ -1,6 +1,10 @@
 package sftp
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -42,7 +46,7 @@ func (s *SFTPServer) Start() error {
 		},
 	}
 
-	// Generate ephemeral host key
+	// Generate dynamic RSA 2048 host key
 	key, err := generateHostKey()
 	if err != nil {
 		return fmt.Errorf("failed to generate host key: %w", err)
@@ -116,7 +120,7 @@ func (s *SFTPServer) handleConn(nConn net.Conn, config *ssh.ServerConfig) {
 		server, err := sftp.NewServer(
 			channel,
 			sftp.WithDebug(io.Discard),
-			sftp.ReadOnly(), // Handled by instance chroot
+			sftp.ReadOnly(),
 		)
 		if err != nil {
 			log.Printf("[SFTP] server init error: %v", err)
@@ -129,10 +133,16 @@ func (s *SFTPServer) handleConn(nConn net.Conn, config *ssh.ServerConfig) {
 }
 
 func generateHostKey() (ssh.Signer, error) {
-	// For production, load from file, for embedded we can use standard RSA key
-	return ssh.ParsePrivateKey([]byte(ephemeralPrivateKey))
-}
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
 
-const ephemeralPrivateKey = `-----BEGIN RSA PRIVATE KEY-----
-MIIEowIBAAKCAQEA0Yh+6uFhW1y5G/Jk2K5Z9XgY5...
------END RSA PRIVATE KEY-----`
+	privateKeyPEM := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+	}
+	pemBytes := pem.EncodeToMemory(privateKeyPEM)
+
+	return ssh.ParsePrivateKey(pemBytes)
+}
