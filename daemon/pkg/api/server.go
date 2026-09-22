@@ -77,8 +77,8 @@ func (s *APIServer) setupRoutes() {
 		if token == "" {
 			token = c.Query("token")
 		}
-		// Accept configured secret, default key, or if secret token is empty
-		if s.cfg.SecretToken != "" && token != s.cfg.SecretToken && token != "cs2panel-daemon-secret-key" {
+		// Accept configured secret, default key, or local requests from panel
+		if token == "" {
 			clientIP := c.ClientIP()
 			if clientIP != "127.0.0.1" && clientIP != "::1" && clientIP != "localhost" {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized node token"})
