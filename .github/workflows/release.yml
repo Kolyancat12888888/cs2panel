@@ -84,18 +84,33 @@ jobs:
         with:
           go-version: '1.22'
 
-      - name: Build CS2 Deployer Binaries (Linux & Windows)
+      - name: Build CS2 Deployer, Node Daemon & AI Agent Binaries
         run: |
           mkdir -p bin
+          
+          # 1. CS2 Deployer
           cd cs2deployer
           go mod tidy || true
-          
-          # Build Linux AMD64
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.DefaultVersion=${{ steps.version.outputs.tag }}" -o ../bin/cs2deployer-linux-amd64 main.go
-          
-          # Build Windows AMD64
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.DefaultVersion=${{ steps.version.outputs.tag }}" -o ../bin/cs2deployer-windows-amd64.exe main.go
           cd ..
+
+          # 2. CS2 Node Daemon
+          if [ -d daemon ]; then
+            cd daemon
+            go mod tidy || true
+            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o ../bin/cs2daemon-linux-amd64 main.go
+            cd ..
+          fi
+
+          # 3. CS2 AI Client Agent
+          if [ -d client-agent ]; then
+            cd client-agent
+            go mod tidy || true
+            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o ../bin/cs2agent-linux-amd64 main.go
+            GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o ../bin/cs2agent-windows-amd64.exe main.go
+            cd ..
+          fi
 
       - name: Create Release Package Archive
         run: |
@@ -136,6 +151,9 @@ jobs:
             cs2panel-server.tar.gz
             bin/cs2deployer-windows-amd64.exe
             bin/cs2deployer-linux-amd64
+            bin/cs2daemon-linux-amd64
+            bin/cs2agent-linux-amd64
+            bin/cs2agent-windows-amd64.exe
             version.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
