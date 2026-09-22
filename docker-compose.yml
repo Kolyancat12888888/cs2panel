@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  # MySQL Database
+  cs2-mysql:
+    image: mariadb:11.3
+    container_name: cs2-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: cs2panel
+      MYSQL_USER: cs2user
+      MYSQL_PASSWORD: cs2password
+      MYSQL_ROOT_PASSWORD: cs2rootpassword
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    networks:
+      - cs2-net
+
+  # Redis Cache & Queue
+  cs2-redis:
+    image: redis:7-alpine
+    container_name: cs2-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - cs2-net
+
+  # CS2Panel Go Daemon (Node 1)
+  cs2-daemon:
+    build:
+      context: ./daemon
+      dockerfile: ../docker/daemon/Dockerfile
+    container_name: cs2-daemon
+    restart: unless-stopped
+    privileged: true
+    environment:
+      NODE_ID: "node-1"
+      DAEMON_SECRET_TOKEN: "cs2panel-daemon-secret-key"
+      DAEMON_HTTP_PORT: "8080"
+      DAEMON_SFTP_PORT: "2022"
+      MASTER_CS2_PATH: "/opt/cs2panel/master_cs2"
+      SERVERS_ROOT_PATH: "/opt/cs2panel/servers"
+    volumes:
+      - cs2_master:/opt/cs2panel/master_cs2
+      - cs2_servers:/opt/cs2panel/servers
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8080:8080"
+      - "2022:2022"
+      - "27015-27035:27015-27035/udp"
+      - "27015-27035:27015-27035/tcp"
+    networks:
+      - cs2-net
+
+  # Laravel 11 Backend
+  cs2-backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend/Dockerfile
+    container_name: cs2-backend
+    restart: unless-stopped
+    depends_on:
+      - cs2-mysql
+      - cs2-redis
+      - cs2-daemon
+    environment:
+      APP_NAME: "CS2Panel"
+      APP_ENV: "production"
+      APP_DEBUG: "false"
+      APP_URL: "http://localhost:8000"
+      DB_HOST: "cs2-mysql"
+      DB_DATABASE: "cs2panel"
+      DB_USERNAME: "cs2user"
+      DB_PASSWORD: "cs2password"
+      REDIS_HOST: "cs2-redis"
+    ports:
+      - "8000:80"
+    networks:
+      - cs2-net
+
+  # Next.js 14 Frontend UI
+  cs2-frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend/Dockerfile
+    container_name: cs2-frontend
+    restart: unless-stopped
+    depends_on:
+      - cs2-backend
+    environment:
+      NEXT_PUBLIC_API_URL: "http://localhost:8000/api/v1"
+    ports:
+      - "3000:3000"
+    networks:
+      - cs2-net
+
+volumes:
+  mysql_data:
+  cs2_master:
+  cs2_servers:
+
+networks:
+  cs2-net:
+    driver: bridge
