@@ -74,14 +74,39 @@ type HeartbeatResponse struct {
 	DispatchJob *JobRequest `json:"dispatch_job,omitempty"`
 }
 
+type JobPayload struct {
+	Prompt      string          `json:"prompt,omitempty"`
+	ProjectID   string          `json:"project_id,omitempty"`
+	ProjectName string          `json:"project_name,omitempty"`
+	GraphData   json.RawMessage `json:"graph_data,omitempty"`
+}
+
 type JobRequest struct {
 	UUID        string          `json:"uuid"`
 	Type        string          `json:"type"` // plugin.build, plugin.ai_generate
 	ProjectID   string          `json:"project_id"`
 	ProjectName string          `json:"project_name"`
+	Payload     JobPayload      `json:"payload"`
 	GraphData   json.RawMessage `json:"graph_data"`
 	Prompt      string          `json:"prompt,omitempty"`
 	TargetDir   string          `json:"target_dir,omitempty"`
+}
+
+func (j *JobRequest) GetPrompt() string {
+	if strings.TrimSpace(j.Prompt) != "" {
+		return strings.TrimSpace(j.Prompt)
+	}
+	return strings.TrimSpace(j.Payload.Prompt)
+}
+
+func (j *JobRequest) GetProjectName() string {
+	if strings.TrimSpace(j.ProjectName) != "" {
+		return strings.TrimSpace(j.ProjectName)
+	}
+	if strings.TrimSpace(j.Payload.ProjectName) != "" {
+		return strings.TrimSpace(j.Payload.ProjectName)
+	}
+	return "CS2Plugin"
 }
 
 type JobResult struct {
@@ -292,7 +317,8 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 		jobID = fmt.Sprintf("ai_job_%d", time.Now().Unix())
 	}
 
-	log.Printf("[CS2 AI Client] >>> [BACKGROUND AI GENERATOR] Synthesizing Nodes for Prompt: '%s' <<<", job.Prompt)
+	actualPrompt := job.GetPrompt()
+	log.Printf("[CS2 AI Client] >>> [BACKGROUND AI GENERATOR] Synthesizing Nodes for Prompt: '%s' <<<", actualPrompt)
 	a.activeJob = jobID
 
 	defer func() {
@@ -304,7 +330,7 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 		AgentID:    a.config.AgentID,
 		Status:     "success",
 		Progress:   10,
-		Logs:       []string{fmt.Sprintf("AI Generator initiated on agent %s", a.config.DeviceName)},
+		Logs:       []string{fmt.Sprintf("AI Generator initiated on agent %s for prompt: %s", a.config.DeviceName, actualPrompt)},
 		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -322,7 +348,7 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 	}
 
 	result.Logs = append(result.Logs, fmt.Sprintf("Dispatching prompt to Neural LLM [%s] at %s...", modelName, llmURL))
-	llmNodes, llmConns, err := a.callLocalLLM(job.Prompt)
+	llmNodes, llmConns, err := a.callLocalLLM(actualPrompt)
 	if err == nil && len(llmNodes) > 0 {
 		nodes = llmNodes
 		connections = llmConns
@@ -333,7 +359,7 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 			result.Logs = append(result.Logs, fmt.Sprintf("Ollama LLM [%s] unavailable (%v). Using local AST engine...", modelName, err))
 		}
 		// Dynamic AST Engine Fallback
-		promptLower := strings.ToLower(job.Prompt)
+		promptLower := strings.ToLower(actualPrompt)
 	if strings.Contains(promptLower, "awp") || strings.Contains(promptLower, "заход") || strings.Contains(promptLower, "connect") || strings.Contains(promptLower, "spawn") || strings.Contains(promptLower, "спавн") || strings.Contains(promptLower, "первый") || strings.Contains(promptLower, "хп") || strings.Contains(promptLower, "120") {
 		// Event: Player Connect / Full Spawn
 		eventNodeID := "ai_event_spawn_" + fmt.Sprintf("%x", time.Now().UnixNano())[:8]
