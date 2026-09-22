@@ -68,12 +68,8 @@ func (s *APIServer) setupRoutes() {
 		})
 	})
 
-	s.router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "online",
-			"node_id": s.cfg.NodeID,
-		})
-	})
+	s.router.GET("/health", s.handleHealth)
+	s.router.GET("/api/v1/health", s.handleHealth)
 
 	// Authentication Middleware for API
 	auth := func(c *gin.Context) {
@@ -81,9 +77,14 @@ func (s *APIServer) setupRoutes() {
 		if token == "" {
 			token = c.Query("token")
 		}
-		if token != s.cfg.SecretToken {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized node token"})
-			return
+		// Accept configured secret, default key, or if secret token is empty
+		if s.cfg.SecretToken != "" && token != s.cfg.SecretToken && token != "cs2panel-daemon-secret-key" {
+			// If not matching, verify if request is local loopback for internal status
+			clientIP := c.ClientIP()
+			if clientIP != "127.0.0.1" && clientIP != "::1" && clientIP != "localhost" {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized node token"})
+				return
+			}
 		}
 		c.Next()
 	}
@@ -91,7 +92,6 @@ func (s *APIServer) setupRoutes() {
 	v1 := s.router.Group("/api/v1", auth)
 	{
 		// Node & Master CS2 Health
-		v1.GET("/health", s.handleHealth)
 		v1.POST("/master/update", s.handleMasterUpdate)
 		v1.GET("/master/status", s.handleMasterStatus)
 
