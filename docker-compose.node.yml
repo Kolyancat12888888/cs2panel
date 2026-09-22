@@ -9,9 +9,9 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
-      - DAEMON_PORT=8080
-      - SFTP_PORT=2022
-      - DAEMON_SECRET=your_super_secret_node_token
+      - DAEMON_PORT=8888
+      - SFTP_PORT=2222
+      - DAEMON_SECRET=cs2panel_super_secure_node_token_999
       - MASTER_PATH=/opt/cs2panel/master_cs2
       - INSTANCES_PATH=/opt/cs2panel/instances
       - BACKUP_PATH=/opt/cs2panel/backups

@@ -1,0 +1,14 @@
+{
+  "node_name": "Remote-CS2-Node-01",
+  "api_port": 8888,
+  "sftp_port": 2222,
+  "secret_token": "cs2panel_super_secure_node_token_999",
+  "master_cs2_path": "/opt/cs2panel/master_cs2",
+  "instances_path": "/opt/cs2panel/instances",
+  "backup_path": "/opt/cs2panel/backups",
+  "max_memory_mb": 65536,
+  "max_disk_gb": 1000,
+  "steamcmd_path": "/usr/games/steamcmd",
+  "auto_install_metamod": true,
+  "auto_install_css": true
+}
