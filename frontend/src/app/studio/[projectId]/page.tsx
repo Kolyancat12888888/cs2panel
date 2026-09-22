@@ -442,24 +442,34 @@ export default function VisualStudioCanvasPage() {
               }
 
               if (parsedGraph && Array.isArray(parsedGraph.nodes) && parsedGraph.nodes.length > 0) {
-                const newNodes = parsedGraph.nodes.map((n: any, idx: number) => {
-                  const node = normalizeNode(n);
-                  return {
-                    ...node,
-                    x: node.x + (idx * 40),
-                    y: node.y + (idx * 20),
-                  };
+                let firstNodeId: string | null = null;
+                setNodes((prev) => {
+                  const currentMaxY = prev.length > 0 ? Math.max(...prev.map((n) => n.y)) + 260 : 120;
+                  const minGenY = Math.min(...parsedGraph.nodes.map((n: any) => Number(n.y) || 120));
+                  const yOffset = prev.length > 0 ? (currentMaxY - minGenY) : 0;
+
+                  const newNodes = parsedGraph.nodes.map((n: any) => {
+                    const node = normalizeNode(n);
+                    return {
+                      ...node,
+                      x: node.x,
+                      y: node.y + yOffset,
+                    };
+                  });
+                  if (newNodes.length > 0) {
+                    firstNodeId = newNodes[0].id;
+                  }
+                  return [...prev, ...newNodes];
                 });
-                setNodes((prev) => [...prev, ...newNodes]);
 
                 if (Array.isArray(parsedGraph.connections)) {
                   const newConns = parsedGraph.connections.map(normalizeConnection);
                   setConnections((prev) => [...prev, ...newConns]);
                 }
 
-                if (newNodes.length > 0) {
-                  setSelectedNodeId(newNodes[0].id);
-                  setActiveHighlightNodeId(newNodes[0].id);
+                if (firstNodeId) {
+                  setSelectedNodeId(firstNodeId);
+                  setActiveHighlightNodeId(firstNodeId);
                   setTimeout(() => setActiveHighlightNodeId(null), 3000);
                 }
               }
@@ -593,6 +603,21 @@ export default function VisualStudioCanvasPage() {
           >
             <Play className={`w-3.5 h-3.5 ${isSimulating ? 'animate-spin text-cs2-orange' : ''}`} />
             {isSimulating ? 'Simulating...' : 'Simulate Event'}
+          </button>
+
+          <button
+            onClick={() => {
+              if (confirm('Clear all visual nodes and wires from canvas?')) {
+                setNodes([]);
+                setConnections([]);
+                setSelectedNodeId(null);
+              }
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-cs2-card hover:bg-red-950/40 text-xs font-medium text-cs2-muted hover:text-red-400 border border-cs2-border transition"
+            title="Clear all nodes"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Clear
           </button>
 
           <button
