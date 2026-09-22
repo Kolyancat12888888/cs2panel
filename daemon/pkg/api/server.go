@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -57,7 +58,24 @@ func NewAPIServer(
 }
 
 func (s *APIServer) setupRoutes() {
-	// Authentication Middleware
+	// Public Root & Health endpoints (No 404 when opened in browser)
+	s.router.GET("/", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"daemon":  "CS2Panel Node Daemon",
+			"version": "1.0.0",
+			"status":  "online",
+			"node_id": s.cfg.NodeID,
+		})
+	})
+
+	s.router.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status":  "online",
+			"node_id": s.cfg.NodeID,
+		})
+	})
+
+	// Authentication Middleware for API
 	auth := func(c *gin.Context) {
 		token := c.GetHeader("X-Node-Token")
 		if token == "" {
@@ -108,7 +126,7 @@ func (s *APIServer) Start() error {
 func (s *APIServer) handleHealth(c *gin.Context) {
 	ok, msg := s.masterMgr.CheckMasterHealth()
 
-	// Real CPU
+	// Real CPU Usage
 	cpuPercent, _ := cpu.Percent(0, false)
 	cpuUsage := 0.0
 	if len(cpuPercent) > 0 {
@@ -126,8 +144,19 @@ func (s *APIServer) handleHealth(c *gin.Context) {
 		ramPercent = vMem.UsedPercent
 	}
 
-	// Real Disk
-	dStat, _ := disk.Usage(s.cfg.ServersRootPath)
+	// Real Disk Usage with robust fallback
+	diskPath := s.cfg.ServersRootPath
+	if _, err := os.Stat(diskPath); os.IsNotExist(err) {
+		diskPath = s.cfg.MasterCS2Path
+		if _, err := os.Stat(diskPath); os.IsNotExist(err) {
+			diskPath = "/"
+		}
+	}
+	dStat, err := disk.Usage(diskPath)
+	if err != nil || dStat == nil {
+		dStat, _ = disk.Usage("/")
+	}
+
 	totalDiskGB := uint64(0)
 	freeDiskGB := uint64(0)
 	diskPercent := 0.0
@@ -137,13 +166,16 @@ func (s *APIServer) handleHealth(c *gin.Context) {
 		diskPercent = dStat.UsedPercent
 	}
 
-	// Real Host & CPU Model
+	// Real Host & Full Multi-Core CPU Model
 	cpuInfo, _ := cpu.Info()
 	cpuModel := "Unknown Processor"
-	cpuCores := 1
 	if len(cpuInfo) > 0 {
 		cpuModel = cpuInfo[0].ModelName
-		cpuCores = int(cpuInfo[0].Cores)
+	}
+
+	cpuCores := runtime.NumCPU()
+	if cCount, err := cpu.Counts(true); err == nil && cCount > 0 {
+		cpuCores = cCount
 	}
 
 	hInfo, _ := host.Info()
