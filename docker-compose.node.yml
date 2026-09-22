@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  cs2-daemon:
+    build:
+      context: ./daemon
+      dockerfile: Dockerfile
+    container_name: cs2panel-daemon
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - DAEMON_PORT=8080
+      - SFTP_PORT=2022
+      - DAEMON_SECRET=your_super_secret_node_token
+      - MASTER_PATH=/opt/cs2panel/master_cs2
+      - INSTANCES_PATH=/opt/cs2panel/instances
+      - BACKUP_PATH=/opt/cs2panel/backups
+    volumes:
+      - /opt/cs2panel/master_cs2:/opt/cs2panel/master_cs2
+      - /opt/cs2panel/instances:/opt/cs2panel/instances
+      - /opt/cs2panel/backups:/opt/cs2panel/backups
+      - ./daemon/daemon.json:/etc/cs2panel/daemon.json:ro
