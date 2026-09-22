@@ -21,6 +21,20 @@ export interface Server {
   created_at: string;
 }
 
+export interface NodeTelemetry {
+  cpu_model?: string;
+  cpu_cores?: number;
+  cpu_usage_pct?: number;
+  ram_used_mb?: number;
+  ram_total_mb?: number;
+  ram_usage_pct?: number;
+  disk_used_gb?: number;
+  disk_total_gb?: number;
+  disk_usage_pct?: number;
+  platform?: string;
+  uptime_seconds?: number;
+}
+
 export interface Node {
   id: number;
   name: string;
@@ -34,6 +48,7 @@ export interface Node {
   total_disk_gb: number;
   cpu_cores: number;
   servers_count?: number;
+  telemetry?: NodeTelemetry;
 }
 
 export interface User {
