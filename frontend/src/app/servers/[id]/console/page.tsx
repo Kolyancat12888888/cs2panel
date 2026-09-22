@@ -11,41 +11,67 @@ export default function ServerConsolePage() {
   const params = useParams();
   const serverId = params.id as string;
   const [server, setServer] = useState<Server | null>(null);
-  const [logs, setLogs] = useState<string[]>([
-    '>>> [CS2Panel] Connecting to Source 2 Server RCON Console...',
-    '>>> [Engine] Source 2 Dedicated Server initialized on 0.0.0.0:27015',
-    '>>> [Metamod:Source] Loaded version 2.0.0-git1411 (built for Source 2)',
-    '>>> [CounterStrikeSharp] Initialized .NET 8 Core Runtime successfully.',
-    '>>> [CounterStrikeSharp] Loading plugins from game/csgo/addons/counterstrikesharp/plugins...',
-    '>>> [MatchZy] Match management plugin ready. Listening for match commands.',
-    '>>> [CS2Panel] Ready for RCON commands (Type help or cvar name)',
-  ]);
+  const [logs, setLogs] = useState<string[]>([]);
   const [command, setCommand] = useState('');
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const logEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const lastLogIndexRef = useRef(0);
 
   useEffect(() => {
     fetchApi(`/servers/${serverId}`)
       .then((data) => setServer(data))
       .catch(() => {});
 
-    // Poll recent logs
+    // Initial fetch
+    fetchApi(`/servers/${serverId}/logs`)
+      .then((data) => {
+        if (data && Array.isArray(data.logs) && data.logs.length > 0) {
+          setLogs(data.logs);
+          lastLogIndexRef.current = data.logs.length;
+        } else {
+          setLogs([
+            '>>> [CS2Panel] Connecting to Source 2 Server RCON Console...',
+            '>>> [Engine] Source 2 Dedicated Server initialized',
+            '>>> [CS2Panel] Ready for RCON commands (Type help or cvar name)',
+          ]);
+        }
+      })
+      .catch(() => {});
+
+    // Poll new incoming log lines every 2 seconds
     const interval = setInterval(() => {
       fetchApi(`/servers/${serverId}/logs`)
         .then((data) => {
-          if (data && Array.isArray(data.logs) && data.logs.length > 0) {
-            setLogs((prev) => [...prev, ...data.logs]);
+          if (!data || !Array.isArray(data.logs)) return;
+          const totalCount = data.logs.length;
+          if (totalCount > lastLogIndexRef.current) {
+            const newLines = data.logs.slice(lastLogIndexRef.current);
+            lastLogIndexRef.current = totalCount;
+            setLogs((prev) => [...prev, ...newLines]);
+          } else if (totalCount < lastLogIndexRef.current) {
+            // Buffer was reset or server restarted
+            lastLogIndexRef.current = totalCount;
+            setLogs(data.logs);
           }
         })
         .catch(() => {});
-    }, 4000);
+    }, 2000);
 
     return () => clearInterval(interval);
   }, [serverId]);
 
+  const handleScroll = () => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    isNearBottomRef.current = scrollHeight - scrollTop - clientHeight < 60;
+  };
+
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (isNearBottomRef.current && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    }
   }, [logs]);
 
   const handleSendCommand = async (e: React.FormEvent) => {
@@ -57,6 +83,10 @@ export default function ServerConsolePage() {
     setCommandHistory((prev) => [...prev, cmdToSend]);
     setHistoryIndex(-1);
     setCommand('');
+    isNearBottomRef.current = true;
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    }
 
     try {
       const res = await fetchApi(`/servers/${serverId}/rcon`, {
@@ -147,7 +177,10 @@ export default function ServerConsolePage() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setLogs([])}
+              onClick={() => {
+                setLogs([]);
+                lastLogIndexRef.current = 0;
+              }}
               className="p-1 rounded hover:bg-cs2-card text-cs2-muted hover:text-white transition text-xs flex items-center gap-1"
               title="Clear Terminal"
             >
@@ -158,13 +191,16 @@ export default function ServerConsolePage() {
         </div>
 
         {/* Terminal Logs Output */}
-        <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1 select-text">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1 select-text scroll-smooth"
+        >
           {logs.map((line, idx) => (
             <div key={idx} className="leading-relaxed">
               {formatLogLine(line)}
             </div>
           ))}
-          <div ref={logEndRef} />
         </div>
 
         {/* Command Input Bar */}
