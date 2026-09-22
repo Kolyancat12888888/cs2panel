@@ -71,11 +71,22 @@ class AgentGatewayController extends Controller
             ]);
         }
 
-        // Check if there are pending jobs for this agent
-        $pendingJob = JobTask::where('agent_id', $data['agent_id'])
+        // Check if there are pending jobs for this agent or general queue
+        $pendingJob = JobTask::where(function ($q) use ($data) {
+                $q->where('agent_id', $data['agent_id'])
+                  ->orWhereNull('agent_id');
+            })
             ->where('status', 'pending')
             ->oldest()
             ->first();
+
+        if ($pendingJob) {
+            $pendingJob->update([
+                'status' => 'processing',
+                'agent_id' => $data['agent_id'],
+                'started_at' => now(),
+            ]);
+        }
 
         return response()->json([
             'status' => 'acknowledged',

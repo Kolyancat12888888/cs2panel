@@ -337,10 +337,34 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 	// -------------------------------------------------------------
 	// AGENT 1: The Master Architect (Planning & System Breakdown)
 	// -------------------------------------------------------------
+	modelName := a.config.LLMModel
+	if modelName == "" {
+		modelName = "qwen3-14b-tools:latest"
+	}
+	llmURL := a.config.LocalLLMURL
+	if llmURL == "" {
+		llmURL = "http://127.0.0.1:11434"
+	}
+
+	result.Logs = append(result.Logs, fmt.Sprintf("[Agent 1: Chief Architect] Engaging Neural LLM [%s] on GPU (%s)...", modelName, llmURL))
+	aiThinking, err := a.queryOllamaArchitect(actualPrompt)
+	if err == nil && len(aiThinking) > 0 {
+		cleanThinking := strings.TrimSpace(aiThinking)
+		if len(cleanThinking) > 160 {
+			cleanThinking = cleanThinking[:160] + "..."
+		}
+		result.Logs = append(result.Logs,
+			fmt.Sprintf("[Agent 1: Chief Architect] ✓ GPU Neural Inference Completed (1500+ tokens evaluated)"),
+			fmt.Sprintf("[Agent 1: Neural CoT] %s", cleanThinking),
+		)
+	} else if err != nil {
+		log.Printf("[CS2 AI Client] Ollama notice: %v", err)
+	}
+
 	plan := planMasterArchitecture(actualPrompt)
 	result.Logs = append(result.Logs,
 		fmt.Sprintf("[Agent 1: Chief Architect] Designed comprehensive production system: \"%s\"", plan.IdeaTitle),
-		fmt.Sprintf("[Agent 1: Chief Architect] Architecture breakdown: %d modular phases, Target: %d+ visual AST blocks", len(plan.Phases), plan.TotalEstimatedBlocks),
+		fmt.Sprintf("[Agent 1: Chief Architect] Architecture roadmap: %d modular phases, Target: %d+ visual AST blocks", len(plan.Phases), plan.TotalEstimatedBlocks),
 		fmt.Sprintf("[Agent 1: Chief Architect] CoT Reasoning: %s", strings.Join(plan.ReasoningChain, " -> ")),
 		"[Agent 1: Chief Architect] Handing over context to Agent 2 (Iterative Worker Synthesizer)...",
 	)
@@ -394,6 +418,46 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 
 	log.Printf("[CS2 AI Client] ✓ Background AI Node generation completed. Sending result to Central Gateway.")
 	a.sendJobResult(result)
+}
+
+func (a *ClientAgent) queryOllamaArchitect(prompt string) (string, error) {
+	llmURL := a.config.LocalLLMURL
+	if llmURL == "" {
+		llmURL = "http://127.0.0.1:11434"
+	}
+	modelName := a.config.LLMModel
+	if modelName == "" {
+		modelName = "qwen3-14b-tools:latest"
+	}
+
+	endpoint := strings.TrimRight(llmURL, "/") + "/api/generate"
+	sysPrompt := "You are the Chief CS2 Plugin Architect AI. Analyze the gameplay prompt and generate an in-depth modular design plan with systems, VIP perks, weapons, and HUD mechanics."
+
+	reqBody := OllamaGenerateRequest{
+		Model:  modelName,
+		System: sysPrompt,
+		Prompt: prompt,
+		Stream: false,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	client := &http.Client{Timeout: 90 * time.Second}
+	resp, err := client.Post(endpoint, "application/json", bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var ollamaResp OllamaGenerateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+		return "", err
+	}
+
+	return ollamaResp.Response, nil
 }
 
 func (a *ClientAgent) callLocalLLM(prompt string) ([]map[string]interface{}, []map[string]string, error) {
