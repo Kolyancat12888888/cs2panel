@@ -54,6 +54,8 @@ export interface Plugin {
   description: string;
   author: string;
   version: string;
+  download_url?: string;
+  github_repo?: string;
   is_featured: boolean;
   install_count: number;
 }

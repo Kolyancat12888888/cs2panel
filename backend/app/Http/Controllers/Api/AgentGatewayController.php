@@ -65,7 +65,7 @@ class AgentGatewayController extends Controller
                 'status' => $data['status'],
                 'cpu_usage' => $data['cpu_usage'] ?? 0,
                 'ram_usage_mb' => $data['ram_usage_mb'] ?? 0,
-                'active_job_id' => $data['active_job_id'],
+                'active_job_id' => $data['active_job_id'] ?? null,
                 'capabilities' => $data['capabilities'] ?? $agent->capabilities,
                 'last_heartbeat_at' => now(),
             ]);
