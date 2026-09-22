@@ -71,6 +71,11 @@ class AgentGatewayController extends Controller
             ]);
         }
 
+        // Reset stuck processing jobs older than 3 minutes
+        JobTask::where('status', 'processing')
+            ->where('started_at', '<', now()->subMinutes(3))
+            ->update(['status' => 'pending', 'started_at' => null]);
+
         // Check if there are pending jobs for this agent or general queue
         $pendingJob = JobTask::where(function ($q) use ($data) {
                 $q->where('agent_id', $data['agent_id'])
@@ -98,7 +103,7 @@ class AgentGatewayController extends Controller
     public function submitJobResult(Request $request)
     {
         $data = $request->validate([
-            'job_id' => 'required|string',
+            'job_id' => 'required',
             'agent_id' => 'required|string',
             'status' => 'required|string',
             'progress' => 'nullable|integer',
@@ -107,15 +112,21 @@ class AgentGatewayController extends Controller
             'error' => 'nullable|string',
         ]);
 
-        $job = JobTask::where('uuid', $data['job_id'])->firstOrFail();
-        $job->update([
-            'status' => $data['status'] === 'success' ? 'completed' : 'failed',
-            'progress' => $data['progress'] ?? 100,
-            'logs' => $data['logs'] ?? [],
-            'result' => $data['artifact'] ?? null,
-            'error' => $data['error'] ?? null,
-            'finished_at' => now(),
-        ]);
+        $jobIdStr = (string)$data['job_id'];
+        $job = JobTask::where('uuid', $jobIdStr)
+            ->orWhere('id', $jobIdStr)
+            ->first();
+
+        if ($job) {
+            $job->update([
+                'status' => $data['status'] === 'success' ? 'completed' : 'failed',
+                'progress' => $data['progress'] ?? 100,
+                'logs' => $data['logs'] ?? [],
+                'result' => $data['artifact'] ?? null,
+                'error' => $data['error'] ?? null,
+                'finished_at' => now(),
+            ]);
+        }
 
         return response()->json(['message' => 'Job result recorded successfully']);
     }

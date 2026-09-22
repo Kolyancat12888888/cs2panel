@@ -1,0 +1,141 @@
+name: Auto Release & Package
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build, Package and Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate Next Semver Version
+        id: version
+        run: |
+          # Fetch all tags
+          git fetch --tags
+          
+          # Get highest tag or default to v1.0.0
+          LATEST_TAG=$(git tag -l "v*" | sort -V | tail -n 1)
+          
+          if [ -z "$LATEST_TAG" ]; then
+            NEW_TAG="v1.0.0"
+          else
+            # Strip leading 'v'
+            VER="${LATEST_TAG#v}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$VER"
+            
+            # Default fallback if parsing fails
+            MAJOR=${MAJOR:-1}
+            MINOR=${MINOR:-0}
+            PATCH=${PATCH:-0}
+            
+            # Increment patch version
+            NEW_PATCH=$((PATCH + 1))
+            NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+          fi
+          
+          echo "tag=${NEW_TAG}" >> $GITHUB_OUTPUT
+          echo "Calculated new version tag: ${NEW_TAG}"
+          echo "${NEW_TAG}" > version.txt
+
+      - name: Setup PHP 8.2 & Composer
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, bcmath, curl, zip
+          coverage: none
+
+      - name: Install Backend Production Dependencies
+        working-directory: backend
+        run: |
+          composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build Frontend Production Assets
+        working-directory: frontend
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+          npm run build
+
+      - name: Setup Go 1.22
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build CS2 Deployer Binaries (Linux & Windows)
+        run: |
+          mkdir -p bin
+          cd cs2deployer
+          go mod tidy || true
+          
+          # Build Linux AMD64
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.DefaultVersion=${{ steps.version.outputs.tag }}" -o ../bin/cs2deployer-linux-amd64 main.go
+          
+          # Build Windows AMD64
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.DefaultVersion=${{ steps.version.outputs.tag }}" -o ../bin/cs2deployer-windows-amd64.exe main.go
+          cd ..
+
+      - name: Create Release Package Archive
+        run: |
+          mkdir -p dist/package
+          
+          # Copy backend without sqlite database or .env
+          mkdir -p dist/package/backend
+          rsync -av --exclude='database/database.sqlite*' --exclude='.env' --exclude='storage/logs/*' backend/ dist/package/backend/
+          
+          # Copy frontend
+          mkdir -p dist/package/frontend
+          rsync -av frontend/ dist/package/frontend/
+          
+          # Copy daemon, nginx & scripts & root files
+          if [ -d daemon ]; then cp -r daemon dist/package/; fi
+          if [ -d nginx ]; then cp -r nginx dist/package/; fi
+          cp version.txt dist/package/
+          if [ -f docker-compose.yml ]; then cp docker-compose.yml dist/package/; fi
+          if [ -f Makefile ]; then cp Makefile dist/package/; fi
+          if [ -f README.md ]; then cp README.md dist/package/; fi
+          
+          # Create zip & tar.gz archives
+          cd dist/package
+          zip -r ../../cs2panel-server.zip .
+          tar -czf ../../cs2panel-server.tar.gz .
+          cd ../..
+
+      - name: Create Git Tag & GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "CS2Panel Release ${{ steps.version.outputs.tag }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            cs2panel-server.zip
+            cs2panel-server.tar.gz
+            bin/cs2deployer-windows-amd64.exe
+            bin/cs2deployer-linux-amd64
+            version.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

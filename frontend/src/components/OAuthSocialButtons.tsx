@@ -30,7 +30,9 @@ export default function OAuthSocialButtons() {
 
   const handleProviderClick = (provider: string) => {
     // Navigate to backend OAuth redirect endpoint
-    window.location.href = `http://localhost:8000/auth/oauth/${provider}/redirect`;
+    const apiBase = getApiBase();
+    const backendBase = apiBase.endsWith('/api/v1') ? apiBase.slice(0, -7) : apiBase;
+    window.location.href = `${backendBase}/auth/oauth/${provider}/redirect`;
   };
 
   const getProviderIcon = (provider: string) => {

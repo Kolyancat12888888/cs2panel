@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -76,16 +77,17 @@ type HeartbeatResponse struct {
 
 type JobPayload struct {
 	Prompt      string          `json:"prompt,omitempty"`
-	ProjectID   string          `json:"project_id,omitempty"`
+	ProjectID   interface{}     `json:"project_id,omitempty"`
 	ProjectName string          `json:"project_name,omitempty"`
 	GraphData   json.RawMessage `json:"graph_data,omitempty"`
 }
 
 type JobRequest struct {
+	ID          interface{}     `json:"id,omitempty"`
 	UUID        string          `json:"uuid"`
 	Type        string          `json:"type"` // plugin.build, plugin.ai_generate
-	ProjectID   string          `json:"project_id"`
-	ProjectName string          `json:"project_name"`
+	ProjectID   interface{}     `json:"project_id,omitempty"`
+	ProjectName string          `json:"project_name,omitempty"`
 	Payload     JobPayload      `json:"payload"`
 	GraphData   json.RawMessage `json:"graph_data"`
 	Prompt      string          `json:"prompt,omitempty"`
@@ -295,9 +297,17 @@ func (a *ClientAgent) sendHeartbeat() {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		var hbResp HeartbeatResponse
-		if err := json.NewDecoder(resp.Body).Decode(&hbResp); err == nil && hbResp.DispatchJob != nil {
-			go a.routeJob(hbResp.DispatchJob)
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err == nil {
+			var hbResp HeartbeatResponse
+			if err := json.Unmarshal(bodyBytes, &hbResp); err == nil {
+				if hbResp.DispatchJob != nil {
+					log.Printf("[CS2 AI Client] >>> RECEIVED JOB DISPATCH: ID=%s Type=%s <<<", hbResp.DispatchJob.UUID, hbResp.DispatchJob.Type)
+					go a.routeJob(hbResp.DispatchJob)
+				}
+			} else {
+				log.Printf("[CS2 AI Client] Heartbeat response decode warning: %v", err)
+			}
 		}
 	}
 }
@@ -800,7 +810,7 @@ public class %sPlugin : BasePlugin
 
     public override void Load(bool hotReload)
     {
-        Log("[%s] Loaded successfully! Initializing 26 gameplay modules...");
+        Console.WriteLine("[%s] Loaded successfully! Initializing 26 gameplay modules...");
         RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
         RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
         RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
@@ -829,9 +839,13 @@ public class %sPlugin : BasePlugin
         var player = @event.Userid;
         if (player == null || !player.IsValid) return HookResult.Continue;
 
-        // Set Health and Loadout
-        player.PlayerPawn.Value.Health = 120;
-        player.PlayerPawn.Value.ArmorValue = 100;
+        var pawn = player.PlayerPawn?.Value;
+        if (pawn != null && pawn.IsValid)
+        {
+            pawn.Health = 120;
+            pawn.ArmorValue = 100;
+        }
+
         player.GiveNamedItem("weapon_awp");
         player.PrintToCenterHtml("<font color='gold'>[AWP Public]</font> <font color='lime'>120 HP & AWP Granted!</font>");
         return HookResult.Continue;
@@ -845,10 +859,13 @@ public class %sPlugin : BasePlugin
 
         if (attacker != null && attacker.IsValid && attacker != victim)
         {
-            // Vampire Leech & Kill Rewards
-            int healBonus = @event.Headshot ? 50 : 35;
-            attacker.PlayerPawn.Value.Health = Math.Min(150, attacker.PlayerPawn.Value.Health + healBonus);
-            attacker.PrintToCenterHtml($"<font color='lime'>+{healBonus} HP VAMPIRE LEECH!</font>");
+            var pawn = attacker.PlayerPawn?.Value;
+            if (pawn != null && pawn.IsValid)
+            {
+                int healBonus = @event.Headshot ? 50 : 35;
+                pawn.Health = Math.Min(150, pawn.Health + healBonus);
+                attacker.PrintToCenterHtml($"<font color='lime'>+{healBonus} HP VAMPIRE LEECH!</font>");
+            }
         }
         return HookResult.Continue;
     }
@@ -856,14 +873,14 @@ public class %sPlugin : BasePlugin
     [GameEventHandler]
     public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        Log("[%s] Round started. Gameplay logic executed.");
+        Console.WriteLine("[%s] Round started. Gameplay logic executed.");
         return HookResult.Continue;
     }
 
     [GameEventHandler]
     public HookResult OnRoundEnd(EventRoundEnd @event, GameEventInfo info)
     {
-        Log("[%s] Round ended. Calculating MVP highlights...");
+        Console.WriteLine("[%s] Round ended. Calculating MVP highlights...");
         return HookResult.Continue;
     }
 
