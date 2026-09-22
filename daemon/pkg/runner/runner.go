@@ -97,17 +97,35 @@ func (s *ServerProcess) Start() error {
 	s.Status = StatusStarting
 	s.mu.Unlock()
 
+	mapName := s.DefaultMap
+	if mapName == "" {
+		mapName = "de_dust2"
+	}
+	port := s.Port
+	if port <= 0 {
+		port = 27015
+	}
+	rconPort := s.RconPort
+	if rconPort <= 0 {
+		rconPort = 27015
+	}
+	maxPlayers := s.MaxPlayers
+	if maxPlayers <= 0 {
+		maxPlayers = 16
+	}
+
+	cs2Script := filepath.Join(s.InstanceDir, "game", "cs2.sh")
 	cs2Binary := filepath.Join(s.InstanceDir, "game", "bin", "linuxsteamrt64", "cs2")
 
 	args := []string{
 		"-dedicated",
-		"-port", fmt.Sprintf("%d", s.Port),
-		"+rcon_port", fmt.Sprintf("%d", s.RconPort),
+		"-port", fmt.Sprintf("%d", port),
+		"+rcon_port", fmt.Sprintf("%d", rconPort),
 		"+rcon_password", s.RconPass,
 		"+game_type", fmt.Sprintf("%d", s.GameType),
 		"+game_mode", fmt.Sprintf("%d", s.GameMode),
-		"+map", s.DefaultMap,
-		"-maxplayers", fmt.Sprintf("%d", s.MaxPlayers),
+		"+map", mapName,
+		"-maxplayers", fmt.Sprintf("%d", maxPlayers),
 		"-console",
 		"-usercon",
 	}
@@ -116,13 +134,27 @@ func (s *ServerProcess) Start() error {
 		args = append(args, "+sv_setsteamaccount", s.GSLT)
 	}
 
-	cmd := exec.Command(cs2Binary, args...)
-	cmd.Dir = filepath.Join(s.InstanceDir, "game", "bin", "linuxsteamrt64")
+	var cmd *exec.Cmd
+	linuxBinDir := filepath.Join(s.InstanceDir, "game", "bin", "linuxsteamrt64")
+
+	if _, err := os.Stat(cs2Script); err == nil {
+		_ = os.Chmod(cs2Script, 0755)
+		cmd = exec.Command(cs2Script, args...)
+		cmd.Dir = filepath.Join(s.InstanceDir, "game")
+	} else if _, err := os.Stat(cs2Binary); err == nil {
+		_ = os.Chmod(cs2Binary, 0755)
+		cmd = exec.Command(cs2Binary, args...)
+		cmd.Dir = linuxBinDir
+	} else {
+		// Fallback for Windows or direct binary
+		winBin := filepath.Join(s.InstanceDir, "game", "bin", "win64", "cs2.exe")
+		cmd = exec.Command(winBin, args...)
+		cmd.Dir = filepath.Join(s.InstanceDir, "game", "bin", "win64")
+	}
+
 	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("LD_LIBRARY_PATH=%s:%s",
-			filepath.Join(s.InstanceDir, "game", "bin", "linuxsteamrt64"),
-			os.Getenv("LD_LIBRARY_PATH"),
-		),
+		fmt.Sprintf("LD_LIBRARY_PATH=%s:%s", linuxBinDir, os.Getenv("LD_LIBRARY_PATH")),
+		"SteamAppId=730",
 	)
 
 	stdout, err := cmd.StdoutPipe()
@@ -131,6 +163,11 @@ func (s *ServerProcess) Start() error {
 		return err
 	}
 	s.stdout = stdout
+
+	stderr, err := cmd.StderrPipe()
+	if err == nil {
+		go s.pipeLogs(stderr)
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -146,9 +183,9 @@ func (s *ServerProcess) Start() error {
 
 	s.cmd = cmd
 	s.setStatus(StatusRunning)
-	s.broadcastLog(fmt.Sprintf(">>> [CS2Panel] Process started with PID %d on port %d <<<", cmd.Process.Pid, s.Port))
+	s.broadcastLog(fmt.Sprintf(">>> [CS2Panel] Process started with PID %d on port %d <<<", cmd.Process.Pid, port))
 
-	// Stream stdout/stderr
+	// Stream stdout
 	go s.pipeLogs(stdout)
 
 	// Wait for process exit & auto-crash recovery
