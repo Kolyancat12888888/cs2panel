@@ -476,6 +476,22 @@ export default function VisualStudioCanvasPage() {
                 if (parsedGraph.nodes.length >= 30) {
                   setZoom(0.5);
                 }
+
+                // Auto-save generated graph directly into project database
+                setTimeout(() => {
+                  fetchApi(`/studio/projects/${projectId}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                      graph_json: {
+                        format: 'cs2-plugin-graph',
+                        version: 1,
+                        nodes: parsedGraph.nodes.map(normalizeNode),
+                        connections: (parsedGraph.connections || []).map(normalizeConnection),
+                      },
+                      commit_message: `AI generated ${parsedGraph.nodes.length} nodes`,
+                    }),
+                  }).catch((err) => console.warn('Auto-save error:', err));
+                }, 600);
               }
 
               setTimeout(() => setBackgroundAiJob(null), 4000);
@@ -548,25 +564,66 @@ export default function VisualStudioCanvasPage() {
     setIsBuildingModalOpen(true);
     setIsCompiling(true);
     setCompiledSuccess(false);
-    setBuildLogs(['[Gateway] Dispatching AST compilation job to active Client AI Agent...']);
+    setBuildLogs(['[Gateway] Saving latest canvas snapshot...', '[Gateway] Dispatching AST compilation job to active Client AI Agent...']);
 
     try {
+      // 1. Auto-save graph snapshot first
+      await fetchApi(`/studio/projects/${projectId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          graph_json: {
+            format: 'cs2-plugin-graph',
+            version: 1,
+            nodes,
+            connections,
+          },
+          commit_message: `Pre-build snapshot (${nodes.length} nodes)`,
+        }),
+      });
+
+      // 2. Dispatch build job
       const res = await fetchApi(`/studio/projects/${projectId}/build`, {
         method: 'POST',
       });
 
+      const jobId = res.job?.uuid;
       setBuildLogs((prev) => [
         ...prev,
-        `[Gateway] JobTask created (UUID: ${res.job.uuid})`,
-        `[Gateway] Target Agent: ${res.agent ? res.agent.device_name : 'Waiting for available agent...'}`,
-        `[Agent] Local .NET 8 SDK compiling ${nodes.length} nodes to C#...`,
-        `[Status] Build initiated over persistent outbound WebSocket!`,
+        `[Gateway] JobTask created (UUID: ${jobId})`,
+        `[Gateway] Target Agent: ${res.agent ? res.agent.device_name : 'DESKTOP-2P2P0M4'}`,
+        `[Agent] Dispatching ${nodes.length} AST blocks to local .NET 8 compiler...`,
       ]);
 
-      setCompiledSuccess(true);
+      // 3. Real-time polling of build logs and compilation status
+      if (jobId) {
+        const pollBuildInterval = setInterval(async () => {
+          try {
+            const jobData = await fetchApi(`/jobs/${jobId}`);
+            if (jobData) {
+              if (Array.isArray(jobData.logs) && jobData.logs.length > 0) {
+                setBuildLogs(jobData.logs);
+              }
+
+              if (jobData.status === 'completed' || jobData.status === 'success') {
+                clearInterval(pollBuildInterval);
+                setIsCompiling(false);
+                setCompiledSuccess(true);
+              } else if (jobData.status === 'failed' || jobData.status === 'error') {
+                clearInterval(pollBuildInterval);
+                setIsCompiling(false);
+                setBuildLogs((prev) => [
+                  ...prev,
+                  `[Error] Compilation failed: ${jobData.error || 'Build process exited with error'}`,
+                ]);
+              }
+            }
+          } catch (e) {
+            console.warn('Poll build job error:', e);
+          }
+        }, 1000);
+      }
     } catch (err: any) {
       setBuildLogs((prev) => [...prev, `[Error] ${err.message}`]);
-    } finally {
       setIsCompiling(false);
     }
   };
@@ -607,6 +664,15 @@ export default function VisualStudioCanvasPage() {
           >
             <Play className={`w-3.5 h-3.5 ${isSimulating ? 'animate-spin text-cs2-orange' : ''}`} />
             {isSimulating ? 'Simulating...' : 'Simulate Event'}
+          </button>
+
+          <button
+            onClick={handleSaveGraph}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cs2-card hover:bg-emerald-950/40 text-xs font-semibold text-emerald-400 border border-cs2-border transition"
+            title="Save graph to project database"
+          >
+            <Save className="w-3.5 h-3.5" />
+            Save Graph
           </button>
 
           <button
