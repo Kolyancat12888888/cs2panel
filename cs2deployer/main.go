@@ -274,10 +274,25 @@ func checkAndApplyUpdate(cfg *Config, force bool) (bool, error) {
 	// 4. Restore critical files
 	restoreCriticalFiles(cfg)
 
-	// 5. Run post-update migrations and optimizations
+	// 5. Update standalone daemon binary if available in release assets
+	if runtime.GOOS != "windows" {
+		for _, asset := range release.Assets {
+			if asset.Name == "cs2daemon-linux-amd64" {
+				targetBin := filepath.Join(cfg.DaemonDir, "cs2daemon-linux-amd64")
+				_ = os.MkdirAll(cfg.DaemonDir, 0755)
+				if err := downloadFile(asset.BrowserDownloadURL, targetBin); err == nil {
+					_ = os.Chmod(targetBin, 0755)
+					log.Printf("[DEPLOYER] Updated %s directly from release assets", asset.Name)
+				}
+				break
+			}
+		}
+	}
+
+	// 6. Run post-update migrations and optimizations
 	runPostUpdateHooks(cfg)
 
-	// 6. Save new version
+	// 7. Save new version
 	setLocalVersion(cfg.TargetDir, release.TagName)
 
 	return true, nil

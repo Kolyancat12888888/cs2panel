@@ -58,7 +58,7 @@ func NewAPIServer(
 }
 
 func (s *APIServer) setupRoutes() {
-	// Public Root & Health endpoints (No 404 when opened in browser)
+	// Public Root & Health endpoints (No 404 / 401 when health polling)
 	s.router.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"daemon":  "CS2Panel Node Daemon",
@@ -79,7 +79,6 @@ func (s *APIServer) setupRoutes() {
 		}
 		// Accept configured secret, default key, or if secret token is empty
 		if s.cfg.SecretToken != "" && token != s.cfg.SecretToken && token != "cs2panel-daemon-secret-key" {
-			// If not matching, verify if request is local loopback for internal status
 			clientIP := c.ClientIP()
 			if clientIP != "127.0.0.1" && clientIP != "::1" && clientIP != "localhost" {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized node token"})
@@ -89,33 +88,33 @@ func (s *APIServer) setupRoutes() {
 		c.Next()
 	}
 
-	v1 := s.router.Group("/api/v1", auth)
+	v1 := s.router.Group("/api/v1")
 	{
 		// Node & Master CS2 Health
-		v1.POST("/master/update", s.handleMasterUpdate)
+		v1.POST("/master/update", auth, s.handleMasterUpdate)
 		v1.GET("/master/status", s.handleMasterStatus)
 
 		// Server Instances Lifecycle
-		v1.POST("/servers/provision", s.handleProvision)
-		v1.POST("/servers/:uuid/start", s.handleStart)
-		v1.POST("/servers/:uuid/stop", s.handleStop)
-		v1.POST("/servers/:uuid/restart", s.handleRestart)
-		v1.POST("/servers/:uuid/kill", s.handleKill)
+		v1.POST("/servers/provision", auth, s.handleProvision)
+		v1.POST("/servers/:uuid/start", auth, s.handleStart)
+		v1.POST("/servers/:uuid/stop", auth, s.handleStop)
+		v1.POST("/servers/:uuid/restart", auth, s.handleRestart)
+		v1.POST("/servers/:uuid/kill", auth, s.handleKill)
 		v1.GET("/servers/:uuid/status", s.handleStatus)
 
 		// RCON & Console Logs
-		v1.POST("/servers/:uuid/rcon", s.handleRCON)
+		v1.POST("/servers/:uuid/rcon", auth, s.handleRCON)
 		v1.GET("/servers/:uuid/logs/ws", s.handleLogWS)
 		v1.GET("/servers/:uuid/logs/recent", s.handleRecentLogs)
 
 		// Mods & Plugins
-		v1.POST("/servers/:uuid/mods/install-css", s.handleInstallCSS)
-		v1.POST("/servers/:uuid/repair-symlinks", s.handleRepairSymlinks)
+		v1.POST("/servers/:uuid/mods/install-css", auth, s.handleInstallCSS)
+		v1.POST("/servers/:uuid/repair-symlinks", auth, s.handleRepairSymlinks)
 
 		// Files & Configs
-		v1.GET("/servers/:uuid/files/list", s.handleListFiles)
-		v1.POST("/servers/:uuid/files/write", s.handleWriteFile)
-		v1.GET("/servers/:uuid/files/read", s.handleReadFile)
+		v1.GET("/servers/:uuid/files/list", auth, s.handleListFiles)
+		v1.POST("/servers/:uuid/files/write", auth, s.handleWriteFile)
+		v1.GET("/servers/:uuid/files/read", auth, s.handleReadFile)
 	}
 }
 

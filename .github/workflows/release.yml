@@ -124,8 +124,14 @@ jobs:
           mkdir -p dist/package/frontend
           rsync -av --exclude='node_modules' frontend/ dist/package/frontend/
           
-          # Copy daemon, nginx & scripts & root files
-          if [ -d daemon ]; then cp -r daemon dist/package/; fi
+          # Copy daemon with fresh binary, nginx & scripts & root files
+          if [ -d daemon ]; then
+            cp -r daemon dist/package/
+            if [ -f bin/cs2daemon-linux-amd64 ]; then
+              cp -f bin/cs2daemon-linux-amd64 dist/package/daemon/cs2daemon-linux-amd64
+              chmod +x dist/package/daemon/cs2daemon-linux-amd64
+            fi
+          fi
           if [ -d nginx ]; then cp -r nginx dist/package/; fi
           cp version.txt dist/package/
           if [ -f docker-compose.yml ]; then cp docker-compose.yml dist/package/; fi
