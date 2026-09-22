@@ -105,10 +105,6 @@ func (s *ServerProcess) Start() error {
 	if port <= 0 {
 		port = 27015
 	}
-	rconPort := s.RconPort
-	if rconPort <= 0 {
-		rconPort = 27015
-	}
 	maxPlayers := s.MaxPlayers
 	if maxPlayers <= 0 {
 		maxPlayers = 16
@@ -116,11 +112,28 @@ func (s *ServerProcess) Start() error {
 
 	cs2Script := filepath.Join(s.InstanceDir, "game", "cs2.sh")
 	cs2Binary := filepath.Join(s.InstanceDir, "game", "bin", "linuxsteamrt64", "cs2")
+	linuxBinDir := filepath.Join(s.InstanceDir, "game", "bin", "linuxsteamrt64")
+
+	// Ensure ~/.steam/sdk64/steamclient.so exists (required by Steamworks SDK on Linux)
+	if runtime.GOOS != "windows" {
+		homeDir, _ := os.UserHomeDir()
+		if homeDir != "" {
+			sdk64Dir := filepath.Join(homeDir, ".steam", "sdk64")
+			_ = os.MkdirAll(sdk64Dir, 0755)
+			targetSymlink := filepath.Join(sdk64Dir, "steamclient.so")
+			if _, err := os.Stat(targetSymlink); os.IsNotExist(err) {
+				srcLib := filepath.Join(linuxBinDir, "steamclient.so")
+				if _, err := os.Stat(srcLib); err == nil {
+					_ = os.Remove(targetSymlink)
+					_ = os.Symlink(srcLib, targetSymlink)
+				}
+			}
+		}
+	}
 
 	args := []string{
 		"-dedicated",
 		"-port", fmt.Sprintf("%d", port),
-		"+rcon_port", fmt.Sprintf("%d", rconPort),
 		"+rcon_password", s.RconPass,
 		"+game_type", fmt.Sprintf("%d", s.GameType),
 		"+game_mode", fmt.Sprintf("%d", s.GameMode),
@@ -135,7 +148,6 @@ func (s *ServerProcess) Start() error {
 	}
 
 	var cmd *exec.Cmd
-	linuxBinDir := filepath.Join(s.InstanceDir, "game", "bin", "linuxsteamrt64")
 
 	if _, err := os.Stat(cs2Script); err == nil {
 		_ = os.Chmod(cs2Script, 0755)
