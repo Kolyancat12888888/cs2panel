@@ -115,18 +115,26 @@ func (s *ServerProcess) Start() error {
 	cs2Binary := filepath.Join(s.InstanceDir, "game", "bin", "linuxsteamrt64", "cs2")
 	linuxBinDir := filepath.Join(s.InstanceDir, "game", "bin", "linuxsteamrt64")
 
-	// Ensure ~/.steam/sdk64/steamclient.so exists (required by Steamworks SDK on Linux)
+	// Ensure ~/.steam/sdk64/steamclient.so and sdk32 exist (required by Steamworks SDK on Linux)
 	if runtime.GOOS != "windows" {
 		homeDir, _ := os.UserHomeDir()
 		if homeDir != "" {
 			sdk64Dir := filepath.Join(homeDir, ".steam", "sdk64")
 			_ = os.MkdirAll(sdk64Dir, 0755)
-			targetSymlink := filepath.Join(sdk64Dir, "steamclient.so")
-			if _, err := os.Stat(targetSymlink); os.IsNotExist(err) {
-				srcLib := filepath.Join(linuxBinDir, "steamclient.so")
-				if _, err := os.Stat(srcLib); err == nil {
-					_ = os.Remove(targetSymlink)
-					_ = os.Symlink(srcLib, targetSymlink)
+			targetSymlink64 := filepath.Join(sdk64Dir, "steamclient.so")
+
+			candidates64 := []string{
+				filepath.Join(s.InstanceDir, ".steam", "sdk64", "steamclient.so"),
+				filepath.Join(s.InstanceDir, "steamcmd", "linux64", "steamclient.so"),
+				filepath.Join(s.InstanceDir, "game", "bin", "linuxsteamrt64", "steamclient.so"),
+				"/var/lib/pterodactyl/volumes/94654458-5da3-4306-9489-15697eae8112/.steam/sdk64/steamclient.so",
+				"/var/lib/pterodactyl/volumes/94654458-5da3-4306-9489-15697eae8112/steamcmd/linux64/steamclient.so",
+			}
+			for _, cand := range candidates64 {
+				if _, err := os.Stat(cand); err == nil {
+					_ = os.Remove(targetSymlink64)
+					_ = os.Symlink(cand, targetSymlink64)
+					break
 				}
 			}
 		}
