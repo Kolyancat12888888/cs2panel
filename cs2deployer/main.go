@@ -28,10 +28,12 @@ type Config struct {
 	GitHubRepo    string `json:"github_repo"`
 	BackendDir    string `json:"backend_dir"`
 	FrontendDir   string `json:"frontend_dir"`
+	DaemonDir     string `json:"daemon_dir"`
 	BackendPort   string `json:"backend_port"`
 	FrontendPort  string `json:"frontend_port"`
 	CheckInterval int    `json:"check_interval_seconds"`
 	AutoUpdate    bool   `json:"auto_update"`
+	RunDaemon     bool   `json:"run_daemon"`
 	BackupDir     string `json:"backup_dir"`
 	TargetDir     string `json:"target_dir"`
 }
@@ -53,13 +55,14 @@ type GitHubRelease struct {
 }
 
 type ProcessManager struct {
-	config     *Config
-	backendCmd *exec.Cmd
+	config      *Config
+	backendCmd  *exec.Cmd
 	frontendCmd *exec.Cmd
-	mu         sync.Mutex
-	ctx        context.Context
-	cancel     context.CancelFunc
-	running    bool
+	daemonCmd   *exec.Cmd
+	mu          sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
+	running     bool
 }
 
 func main() {
@@ -71,6 +74,7 @@ func main() {
 	runOnlyFlag := flag.Bool("run-only", false, "Run services without checking for GitHub updates")
 	updateOnlyFlag := flag.Bool("update-only", false, "Check and download update, then exit")
 	forceUpdateFlag := flag.Bool("force-update", false, "Force download and reinstall latest release")
+	withDaemonFlag := flag.Bool("daemon", true, "Automatically run Node Daemon if daemon/ folder exists")
 	versionFlag := flag.Bool("version", false, "Print deployer version and exit")
 	flag.Parse()
 
@@ -91,10 +95,12 @@ func main() {
 		TargetDir:     absTarget,
 		BackendDir:    filepath.Join(absTarget, "backend"),
 		FrontendDir:   filepath.Join(absTarget, "frontend"),
+		DaemonDir:     filepath.Join(absTarget, "daemon"),
 		BackendPort:   *backendPortFlag,
 		FrontendPort:  *frontendPortFlag,
 		CheckInterval: *checkIntervalFlag,
 		AutoUpdate:    !*runOnlyFlag,
+		RunDaemon:     *withDaemonFlag,
 		BackupDir:     filepath.Join(absTarget, "_backup"),
 	}
 
@@ -108,8 +114,11 @@ func main() {
 	log.Printf("[DEPLOYER] Target Directory: %s", cfg.TargetDir)
 	log.Printf("[DEPLOYER] Backend Directory: %s", cfg.BackendDir)
 	log.Printf("[DEPLOYER] Frontend Directory: %s", cfg.FrontendDir)
+	if cfg.RunDaemon {
+		log.Printf("[DEPLOYER] Node Daemon Directory: %s", cfg.DaemonDir)
+	}
 	log.Printf("[DEPLOYER] GitHub Repository: https://github.com/%s", cfg.GitHubRepo)
-	log.Printf("[DEPLOYER] Services to manage: Backend (artisan :%s) + Frontend (npm :%s)", cfg.BackendPort, cfg.FrontendPort)
+	log.Printf("[DEPLOYER] Services to manage: Backend (artisan :%s) + Frontend (npm :%s) + Node Daemon (auto)", cfg.BackendPort, cfg.FrontendPort)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -507,13 +516,18 @@ func (pm *ProcessManager) StartAll(ctx context.Context) {
 	pm.ctx, pm.cancel = context.WithCancel(ctx)
 	pm.running = true
 
-	log.Println("[DEPLOYER] Starting CS2Panel Services (Backend + Frontend)...")
+	log.Println("[DEPLOYER] Starting CS2Panel Services (Backend + Frontend + Node Daemon)...")
 
-	// Start Backend (Laravel)
+	// 1. Start Backend (Laravel)
 	go pm.superviseBackend(pm.ctx)
 
-	// Start Frontend (Next.js)
+	// 2. Start Frontend (Next.js)
 	go pm.superviseFrontend(pm.ctx)
+
+	// 3. Start Node Daemon (if enabled and exists)
+	if pm.config.RunDaemon {
+		go pm.superviseDaemon(pm.ctx)
+	}
 }
 
 func (pm *ProcessManager) StopAll() {
@@ -536,12 +550,84 @@ func (pm *ProcessManager) StopAll() {
 		_ = killProcessTree(pm.frontendCmd.Process.Pid)
 		pm.frontendCmd = nil
 	}
+
+	if pm.daemonCmd != nil && pm.daemonCmd.Process != nil {
+		log.Println("[DEPLOYER] Stopping Node Daemon process...")
+		_ = killProcessTree(pm.daemonCmd.Process.Pid)
+		pm.daemonCmd = nil
+	}
 }
 
 func (pm *ProcessManager) RestartAll(ctx context.Context) {
 	pm.StopAll()
 	time.Sleep(1 * time.Second)
 	pm.StartAll(ctx)
+}
+
+func (pm *ProcessManager) superviseDaemon(ctx context.Context) {
+	daemonDir := pm.config.DaemonDir
+	if _, err := os.Stat(daemonDir); os.IsNotExist(err) {
+		log.Printf("[NODE-DAEMON] Directory %s not found. Skipping daemon.", daemonDir)
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		var cmd *exec.Cmd
+		linuxBin := filepath.Join(daemonDir, "cs2daemon-linux-amd64")
+		winBin := filepath.Join(daemonDir, "cs2-daemon.exe")
+
+		if runtime.GOOS == "windows" && fileExists(winBin) {
+			cmd = exec.Command(winBin)
+		} else if runtime.GOOS != "windows" && fileExists(linuxBin) {
+			_ = os.Chmod(linuxBin, 0755)
+			cmd = exec.Command(linuxBin)
+		} else if fileExists(filepath.Join(daemonDir, "main.go")) {
+			log.Printf("[NODE-DAEMON] Pre-compiled binary not found. Running via 'go run main.go'...")
+			cmd = exec.Command("go", "run", "main.go")
+		} else {
+			log.Printf("[NODE-DAEMON] No executable or main.go found in %s. Skipping.", daemonDir)
+			return
+		}
+
+		cmd.Dir = daemonDir
+
+		pm.mu.Lock()
+		pm.daemonCmd = cmd
+		pm.mu.Unlock()
+
+		log.Printf("[NODE-DAEMON] 🚀 Launching Node Daemon (CS2 Game Manager & SFTP) ...")
+		streamOutput(cmd, "[NODE-DAEMON]")
+
+		if err := cmd.Start(); err != nil {
+			log.Printf("[NODE-DAEMON] Error starting Node Daemon: %v", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		_ = cmd.Wait()
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			log.Println("[NODE-DAEMON] Process exited. Auto-restarting in 2s...")
+			time.Sleep(2 * time.Second)
+		}
+	}
+}
+
+func fileExists(filename string) bool {
+	info, err := os.Stat(filename)
+	if os.IsNotExist(err) {
+		return false
+	}
+	return !info.IsDir()
 }
 
 func (pm *ProcessManager) superviseBackend(ctx context.Context) {
