@@ -268,6 +268,50 @@ export default function VisualStudioCanvasPage() {
     });
   };
 
+  // Normalize Node structure from various API formats
+  const normalizeNode = (n: any): GraphNode => {
+    const parsePorts = (ports: any): NodePort[] => {
+      if (!Array.isArray(ports)) return [];
+      return ports.map((p, idx) => {
+        if (typeof p === 'string') {
+          return {
+            id: p,
+            label: p === 'exec' ? 'Exec' : p,
+            type: p === 'exec' ? 'flow' : 'player',
+          };
+        }
+        return {
+          id: p.id || `port_${idx}`,
+          label: p.label || p.id || `Port ${idx}`,
+          type: p.type || 'flow',
+        };
+      });
+    };
+
+    return {
+      id: n.id || `node_${Date.now()}_${Math.random()}`,
+      type: n.type || 'generic',
+      title: n.title || n.type || 'Custom Node',
+      category: (n.category || 'Events') as any,
+      x: Number(n.x) || 100,
+      y: Number(n.y) || 100,
+      color: n.color || (n.category === 'actions' ? 'border-emerald-500 bg-emerald-950/40 text-emerald-400' : 'border-purple-500 bg-purple-950/40 text-purple-400'),
+      inputs: parsePorts(n.inputs),
+      outputs: parsePorts(n.outputs),
+      properties: n.properties || n.config || {},
+    };
+  };
+
+  const normalizeConnection = (c: any): Connection => {
+    return {
+      id: c.id || `conn_${Math.random().toString(36).substr(2, 9)}`,
+      fromNodeId: c.fromNodeId || c.from || '',
+      fromPortId: c.fromPortId || c.fromPort || 'flow_out',
+      toNodeId: c.toNodeId || c.to || '',
+      toPortId: c.toPortId || c.toPort || 'flow_in',
+    };
+  };
+
   // Add Node from Registry
   const addNodeFromPalette = (template: typeof nodeRegistry[0]) => {
     const newNode: GraphNode = {
@@ -293,10 +337,10 @@ export default function VisualStudioCanvasPage() {
         .then((data) => {
           if (data && data.graph_json) {
             if (Array.isArray(data.graph_json.nodes)) {
-              setNodes(data.graph_json.nodes);
+              setNodes(data.graph_json.nodes.map(normalizeNode));
             }
             if (Array.isArray(data.graph_json.connections)) {
-              setConnections(data.graph_json.connections);
+              setConnections(data.graph_json.connections.map(normalizeConnection));
             }
           }
         })
@@ -769,17 +813,17 @@ export default function VisualStudioCanvasPage() {
                 {/* Node Ports (Inputs & Outputs) */}
                 <div className="p-3 space-y-2 text-xs">
                   {/* Inputs */}
-                  {node.inputs.map(inp => (
+                  {(node.inputs || []).map(inp => (
                     <div key={inp.id} className="flex items-center gap-2">
                       <div className="w-2.5 h-2.5 rounded-full bg-blue-500 border border-black hover:scale-125 transition cursor-pointer" />
-                      <span className="text-cs2-muted text-[11px]">{inp.label}</span>
+                      <span className="text-cs2-muted text-[11px]">{inp.label || inp.id}</span>
                     </div>
                   ))}
 
                   {/* Outputs */}
-                  {node.outputs.map(out => (
+                  {(node.outputs || []).map(out => (
                     <div key={out.id} className="flex items-center justify-end gap-2 text-right">
-                      <span className="text-white text-[11px] font-medium">{out.label}</span>
+                      <span className="text-white text-[11px] font-medium">{out.label || out.id}</span>
                       <div className="w-2.5 h-2.5 rounded-full bg-cs2-orange border border-black hover:scale-125 transition cursor-pointer" />
                     </div>
                   ))}
