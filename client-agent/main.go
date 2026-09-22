@@ -300,7 +300,102 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 	nodes := make([]map[string]interface{}, 0)
 	connections := make([]map[string]string, 0)
 
-	if strings.Contains(promptLower, "heal") || strings.Contains(promptLower, "vip") || strings.Contains(promptLower, "hp") {
+	// Check for Spawn / Connect / AWP / Health / Guns / Public Server patterns
+	if strings.Contains(promptLower, "awp") || strings.Contains(promptLower, "заход") || strings.Contains(promptLower, "connect") || strings.Contains(promptLower, "spawn") || strings.Contains(promptLower, "спавн") || strings.Contains(promptLower, "первый") || strings.Contains(promptLower, "хп") || strings.Contains(promptLower, "120") {
+		// Event: Player Connect / Full Spawn
+		eventNodeID := "ai_event_spawn_" + fmt.Sprintf("%x", time.Now().UnixNano())[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       eventNodeID,
+			"type":     "event.player_spawn",
+			"category": "Events",
+			"title":    "Event: Player Spawn / Connect",
+			"x":        120,
+			"y":        160,
+			"color":    "border-emerald-500 bg-emerald-950/40 text-emerald-400",
+			"inputs":   []map[string]string{},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "Exec", "type": "flow"},
+				{"id": "player", "label": "Player", "type": "player"},
+			},
+		})
+
+		// Action 1: Set Health (120 HP)
+		healthNodeID := "ai_action_health_" + fmt.Sprintf("%x", time.Now().UnixNano()+1)[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       healthNodeID,
+			"type":     "player.give_health",
+			"category": "Actions",
+			"title":    "Action: Set Health (120 HP)",
+			"x":        480,
+			"y":        120,
+			"color":    "border-green-500 bg-green-950/40 text-green-400",
+			"properties": map[string]interface{}{
+				"healthAmount": 120,
+				"armorAmount":  100,
+			},
+			"inputs": []map[string]string{
+				{"id": "flow_in", "label": "Exec", "type": "flow"},
+				{"id": "target_player", "label": "Target Player", "type": "player"},
+			},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "Exec", "type": "flow"},
+			},
+		})
+
+		// Action 2: Give Weapon AWP
+		weaponNodeID := "ai_action_awp_" + fmt.Sprintf("%x", time.Now().UnixNano()+2)[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       weaponNodeID,
+			"type":     "player.give_weapon",
+			"category": "Actions",
+			"title":    "Action: Give Weapon (AWP)",
+			"x":        840,
+			"y":        120,
+			"color":    "border-amber-500 bg-amber-950/40 text-amber-400",
+			"properties": map[string]interface{}{
+				"weapon_name": "weapon_awp",
+			},
+			"inputs": []map[string]string{
+				{"id": "flow_in", "label": "Exec", "type": "flow"},
+				{"id": "target_player", "label": "Target Player", "type": "player"},
+			},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "Exec", "type": "flow"},
+			},
+		})
+
+		// HUD: Alert
+		hudNodeID := "ai_hud_spawn_" + fmt.Sprintf("%x", time.Now().UnixNano()+3)[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       hudNodeID,
+			"type":     "hud.print_center_html",
+			"category": "HUD",
+			"title":    "HUD: AWP Public Welcome",
+			"x":        1200,
+			"y":        160,
+			"color":    "border-cyan-500 bg-cyan-950/40 text-cyan-400",
+			"properties": map[string]interface{}{
+				"messageHtml": "<font color='gold'>[AWP Public]</font> <font color='lime'>120 HP & AWP Granted!</font>",
+			},
+			"inputs": []map[string]string{
+				{"id": "flow_in", "label": "Exec", "type": "flow"},
+				{"id": "player", "label": "Player", "type": "player"},
+			},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "Exec", "type": "flow"},
+			},
+		})
+
+		// Wire all together
+		connections = append(connections,
+			map[string]string{"id": "c_spawn_1", "fromNodeId": eventNodeID, "fromPortId": "flow_out", "toNodeId": healthNodeID, "toPortId": "flow_in"},
+			map[string]string{"id": "c_spawn_2", "fromNodeId": eventNodeID, "fromPortId": "player", "toNodeId": healthNodeID, "toPortId": "target_player"},
+			map[string]string{"id": "c_spawn_3", "fromNodeId": healthNodeID, "fromPortId": "flow_out", "toNodeId": weaponNodeID, "toPortId": "flow_in"},
+			map[string]string{"id": "c_spawn_4", "fromNodeId": eventNodeID, "fromPortId": "player", "toNodeId": weaponNodeID, "toPortId": "target_player"},
+			map[string]string{"id": "c_spawn_5", "fromNodeId": weaponNodeID, "fromPortId": "flow_out", "toNodeId": hudNodeID, "toPortId": "flow_in"},
+			map[string]string{"id": "c_spawn_6", "fromNodeId": eventNodeID, "fromPortId": "player", "toNodeId": hudNodeID, "toPortId": "player"},
+		)
+	} else if strings.Contains(promptLower, "heal") || strings.Contains(promptLower, "vip") || strings.Contains(promptLower, "vampire") || strings.Contains(promptLower, "вампир") || strings.Contains(promptLower, "убийств") || strings.Contains(promptLower, "kill") || strings.Contains(promptLower, "death") || strings.Contains(promptLower, "headshot") || strings.Contains(promptLower, "хэдшот") {
 		// Event: Player Death (Kill)
 		eventNodeID := "ai_event_" + fmt.Sprintf("%x", time.Now().UnixNano())[:8]
 		nodes = append(nodes, map[string]interface{}{
@@ -394,7 +489,7 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 			map[string]string{"id": "c_ai_5", "fromNodeId": condNodeID, "fromPortId": "flow_false", "toNodeId": hudNodeID, "toPortId": "flow_in"},
 			map[string]string{"id": "c_ai_6", "fromNodeId": eventNodeID, "fromPortId": "attacker", "toNodeId": hudNodeID, "toPortId": "player"},
 		)
-	} else if strings.Contains(promptLower, "knife") || strings.Contains(promptLower, "warmup") {
+	} else if strings.Contains(promptLower, "knife") || strings.Contains(promptLower, "нож") || strings.Contains(promptLower, "warmup") || strings.Contains(promptLower, "разминк") {
 		// Event: Round Start
 		eventNodeID := "ai_event_round_" + fmt.Sprintf("%x", time.Now().UnixNano())[:8]
 		nodes = append(nodes, map[string]interface{}{

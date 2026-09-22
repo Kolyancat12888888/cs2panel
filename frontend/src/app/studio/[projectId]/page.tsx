@@ -423,20 +423,44 @@ export default function VisualStudioCanvasPage() {
               clearInterval(pollInterval);
               setIsGeneratingAi(false);
 
-              // Parse generated nodes from artifact
-              if (jobData.artifact?.manifest_json) {
-                try {
-                  const parsed = JSON.parse(jobData.artifact.manifest_json);
-                  if (Array.isArray(parsed.nodes)) {
-                    const newNodes = parsed.nodes.map(normalizeNode);
-                    setNodes((prev) => [...prev, ...newNodes]);
+              // Parse generated nodes from result or artifact
+              const resPayload = jobData.result || jobData.artifact;
+              let parsedGraph: any = null;
+
+              if (resPayload) {
+                if (resPayload.manifest_json) {
+                  try {
+                    parsedGraph = typeof resPayload.manifest_json === 'string'
+                      ? JSON.parse(resPayload.manifest_json)
+                      : resPayload.manifest_json;
+                  } catch (e) {
+                    console.warn('Error parsing manifest_json', e);
                   }
-                  if (Array.isArray(parsed.connections)) {
-                    const newConns = parsed.connections.map(normalizeConnection);
-                    setConnections((prev) => [...prev, ...newConns]);
-                  }
-                } catch (e) {
-                  console.warn('Error parsing AI artifact', e);
+                } else if (resPayload.nodes) {
+                  parsedGraph = resPayload;
+                }
+              }
+
+              if (parsedGraph && Array.isArray(parsedGraph.nodes) && parsedGraph.nodes.length > 0) {
+                const newNodes = parsedGraph.nodes.map((n: any, idx: number) => {
+                  const node = normalizeNode(n);
+                  return {
+                    ...node,
+                    x: node.x + (idx * 40),
+                    y: node.y + (idx * 20),
+                  };
+                });
+                setNodes((prev) => [...prev, ...newNodes]);
+
+                if (Array.isArray(parsedGraph.connections)) {
+                  const newConns = parsedGraph.connections.map(normalizeConnection);
+                  setConnections((prev) => [...prev, ...newConns]);
+                }
+
+                if (newNodes.length > 0) {
+                  setSelectedNodeId(newNodes[0].id);
+                  setActiveHighlightNodeId(newNodes[0].id);
+                  setTimeout(() => setActiveHighlightNodeId(null), 3000);
                 }
               }
 
