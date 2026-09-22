@@ -105,9 +105,9 @@ jobs:
           mkdir -p dist/package/backend
           rsync -av --exclude='database/database.sqlite*' --exclude='.env' --exclude='storage/logs/*' backend/ dist/package/backend/
           
-          # Copy frontend
+          # Copy frontend without node_modules
           mkdir -p dist/package/frontend
-          rsync -av frontend/ dist/package/frontend/
+          rsync -av --exclude='node_modules' frontend/ dist/package/frontend/
           
           # Copy daemon, nginx & scripts & root files
           if [ -d daemon ]; then cp -r daemon dist/package/; fi

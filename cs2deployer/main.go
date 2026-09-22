@@ -471,11 +471,21 @@ func runPostUpdateHooks(cfg *Config) {
 	}
 
 	if _, err := os.Stat(cfg.FrontendDir); err == nil {
-		// Ensure frontend dependencies and build are ready if needed
+		log.Println("[DEPLOYER] Installing frontend dependencies (npm install)...")
+		if runtime.GOOS == "windows" {
+			runCmd(cfg.FrontendDir, "cmd", "/c", "npm", "install")
+		} else {
+			runCmd(cfg.FrontendDir, "npm", "install")
+		}
+
 		nextDir := filepath.Join(cfg.FrontendDir, ".next")
 		if _, err := os.Stat(nextDir); os.IsNotExist(err) {
 			log.Println("[DEPLOYER] Building Next.js production frontend assets...")
-			runCmd(cfg.FrontendDir, "npm", "run", "build")
+			if runtime.GOOS == "windows" {
+				runCmd(cfg.FrontendDir, "cmd", "/c", "npm", "run", "build")
+			} else {
+				runCmd(cfg.FrontendDir, "npm", "run", "build")
+			}
 		}
 	}
 }
