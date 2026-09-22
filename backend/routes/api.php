@@ -29,6 +29,7 @@ use App\Http\Controllers\Api\MatchManagerController;
 
 // Public Authentication & Outbound Agent Gateway
 Route::prefix('v1/auth')->group(function () {
+    Route::get('/system-status', [AuthController::class, 'systemStatus']);
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/steam', [AuthController::class, 'steamLogin']);

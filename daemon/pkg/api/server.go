@@ -1,12 +1,17 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/host"
+	"github.com/shirou/gopsutil/v3/mem"
 
 	"github.com/Kolyancat12888888/cs2panel/daemon/pkg/config"
 	"github.com/Kolyancat12888888/cs2panel/daemon/pkg/installer"
@@ -102,11 +107,71 @@ func (s *APIServer) Start() error {
 
 func (s *APIServer) handleHealth(c *gin.Context) {
 	ok, msg := s.masterMgr.CheckMasterHealth()
+
+	// Real CPU
+	cpuPercent, _ := cpu.Percent(0, false)
+	cpuUsage := 0.0
+	if len(cpuPercent) > 0 {
+		cpuUsage = cpuPercent[0]
+	}
+
+	// Real RAM
+	vMem, _ := mem.VirtualMemory()
+	totalRamMB := uint64(0)
+	usedRamMB := uint64(0)
+	ramPercent := 0.0
+	if vMem != nil {
+		totalRamMB = vMem.Total / 1024 / 1024
+		usedRamMB = vMem.Used / 1024 / 1024
+		ramPercent = vMem.UsedPercent
+	}
+
+	// Real Disk
+	dStat, _ := disk.Usage(s.cfg.ServersRootPath)
+	totalDiskGB := uint64(0)
+	freeDiskGB := uint64(0)
+	diskPercent := 0.0
+	if dStat != nil {
+		totalDiskGB = dStat.Total / 1024 / 1024 / 1024
+		freeDiskGB = dStat.Free / 1024 / 1024 / 1024
+		diskPercent = dStat.UsedPercent
+	}
+
+	// Real Host & CPU Model
+	cpuInfo, _ := cpu.Info()
+	cpuModel := "Unknown Processor"
+	cpuCores := 1
+	if len(cpuInfo) > 0 {
+		cpuModel = cpuInfo[0].ModelName
+		cpuCores = int(cpuInfo[0].Cores)
+	}
+
+	hInfo, _ := host.Info()
+	osName := "Linux"
+	uptimeSec := uint64(0)
+	if hInfo != nil {
+		osName = fmt.Sprintf("%s %s (%s)", hInfo.Platform, hInfo.PlatformVersion, hInfo.KernelVersion)
+		uptimeSec = hInfo.Uptime
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"status":        "online",
-		"node_id":       s.cfg.NodeID,
+		"status":         "online",
+		"node_id":        s.cfg.NodeID,
 		"master_healthy": ok,
 		"master_message": msg,
+		"hardware": gin.H{
+			"cpu_model":        cpuModel,
+			"cpu_cores":        cpuCores,
+			"cpu_usage_pct":    cpuUsage,
+			"ram_total_mb":     totalRamMB,
+			"ram_used_mb":      usedRamMB,
+			"ram_usage_pct":    ramPercent,
+			"disk_total_gb":    totalDiskGB,
+			"disk_free_gb":     freeDiskGB,
+			"disk_usage_pct":   diskPercent,
+			"os":               osName,
+			"uptime_seconds":   uptimeSec,
+		},
 	})
 }
 

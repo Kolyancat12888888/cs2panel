@@ -130,6 +130,23 @@ class DaemonClientService
         }
     }
 
+    public function getNodeHealth(Node $node): array
+    {
+        $url = $this->getBaseUri($node) . "/health";
+
+        try {
+            $resp = $this->client->get($url, [
+                'headers' => ['X-Node-Token' => $node->daemon_secret],
+            ]);
+            return json_decode($resp->getBody()->getContents(), true) ?? [];
+        } catch (\Exception $e) {
+            return [
+                'status' => 'offline',
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
     public function repairSymlinks(Server $server): array
     {
         $node = $server->node;

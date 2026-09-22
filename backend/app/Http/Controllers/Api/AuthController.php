@@ -91,4 +91,20 @@ class AuthController extends Controller
             'user' => $user,
         ]);
     }
+
+    public function systemStatus()
+    {
+        $hasAdmin = User::where('role', 'admin')->exists();
+        $hasNodes = \App\Models\Node::exists();
+        $hasAgents = \App\Models\Agent::exists();
+
+        return response()->json([
+            'is_installed' => $hasAdmin,
+            'has_nodes' => $hasNodes,
+            'has_agents' => $hasAgents,
+            'php_version' => PHP_VERSION,
+            'laravel_version' => app()->version(),
+            'database' => config('database.default'),
+        ]);
+    }
 }

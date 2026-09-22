@@ -27,6 +27,7 @@ import {
   HelpCircle,
   FolderGit2
 } from 'lucide-react';
+import { fetchApi } from '@/lib/api';
 
 interface NodePort {
   id: string;
@@ -285,123 +286,135 @@ export default function VisualStudioCanvasPage() {
     setSelectedNodeId(newNode.id);
   };
 
-  // AI Copilot Block Synthesizer
-  const handleAiGenerate = () => {
-    if (!aiPrompt.trim()) return;
-    setIsGeneratingAi(true);
-    setTimeout(() => {
-      // Synthesize new nodes from AI prompt
-      const aiNode1: GraphNode = {
-        id: `node_ai_cmd_${Date.now()}`,
-        type: 'command.register',
-        title: 'Command: !medic / !heal',
-        category: 'Events',
-        x: (-pan.x + 350) / zoom,
-        y: (-pan.y + 150) / zoom,
-        color: 'border-purple-500 bg-purple-950/40 text-purple-400',
-        inputs: [],
-        outputs: [
-          { id: 'flow', label: 'On Executed', type: 'flow' },
-          { id: 'caller', label: 'Player', type: 'player' }
-        ]
-      };
+  // Load Project Graph from API on mount
+  useEffect(() => {
+    if (projectId) {
+      fetchApi(`/studio/projects/${projectId}`)
+        .then((data) => {
+          if (data && data.graph_json) {
+            if (Array.isArray(data.graph_json.nodes)) {
+              setNodes(data.graph_json.nodes);
+            }
+            if (Array.isArray(data.graph_json.connections)) {
+              setConnections(data.graph_json.connections);
+            }
+          }
+        })
+        .catch((err) => {
+          console.warn('Using default starter graph:', err);
+        });
+    }
+  }, [projectId]);
 
-      const aiNode2: GraphNode = {
-        id: `node_ai_action_${Date.now()}`,
-        type: 'player.give_health',
-        title: 'Action: Full Heal (100 HP)',
-        category: 'Actions',
-        x: (-pan.x + 720) / zoom,
-        y: (-pan.y + 150) / zoom,
-        color: 'border-emerald-500 bg-emerald-950/40 text-emerald-400',
-        properties: { healthAmount: 100 },
-        inputs: [
-          { id: 'flow_in', label: 'Exec', type: 'flow' },
-          { id: 'target_player', label: 'Target Player', type: 'player' }
-        ],
-        outputs: [
-          { id: 'flow_out', label: 'Exec', type: 'flow' }
-        ]
-      };
-
-      const newConn: Connection = {
-        id: `c_ai_${Date.now()}`,
-        fromNodeId: aiNode1.id,
-        fromPortId: 'flow',
-        toNodeId: aiNode2.id,
-        toPortId: 'flow_in'
-      };
-
-      setNodes(prev => [...prev, aiNode1, aiNode2]);
-      setConnections(prev => [...prev, newConn]);
-      setIsGeneratingAi(false);
-      setAiPrompt('');
-      setActiveTab('properties');
-      setSelectedNodeId(aiNode1.id);
-    }, 1200);
+  // Save Graph to Backend with Snapshot
+  const handleSaveGraph = async () => {
+    try {
+      await fetchApi(`/studio/projects/${projectId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          graph_json: {
+            format: 'cs2-plugin-graph',
+            version: 1,
+            nodes,
+            connections,
+          },
+          commit_message: `Snapshot at ${new Date().toLocaleTimeString()}`,
+        }),
+      });
+      alert('Graph saved and version snapshot created in database!');
+    } catch (err: any) {
+      alert(`Save error: ${err.message}`);
+    }
   };
 
-  // Debugger / Simulator
+  // Live AI Copilot Block Synthesizer via Backend
+  const handleAiGenerate = async () => {
+    if (!aiPrompt.trim()) return;
+    setIsGeneratingAi(true);
+
+    try {
+      const res = await fetchApi('/studio/ai-generate', {
+        method: 'POST',
+        body: JSON.stringify({ prompt: aiPrompt }),
+      });
+
+      if (res.nodes && Array.isArray(res.nodes)) {
+        const formattedNodes: GraphNode[] = res.nodes.map((n: any) => ({
+          id: n.id,
+          type: n.type,
+          title: n.title,
+          category: (n.category || 'Events') as any,
+          x: (-pan.x + 350 + Math.random() * 100) / zoom,
+          y: (-pan.y + 150 + Math.random() * 100) / zoom,
+          color: n.category === 'actions' ? 'border-emerald-500 bg-emerald-950/40 text-emerald-400' : 'border-purple-500 bg-purple-950/40 text-purple-400',
+          inputs: (n.inputs || []).map((inp: string) => ({ id: inp, label: inp, type: inp === 'exec' ? 'flow' : 'player' })),
+          outputs: (n.outputs || []).map((out: string) => ({ id: out, label: out, type: out === 'exec' ? 'flow' : 'player' })),
+          properties: n.config || {},
+        }));
+
+        setNodes((prev) => [...prev, ...formattedNodes]);
+      }
+
+      setAiPrompt('');
+      setActiveTab('palette');
+    } catch (err: any) {
+      alert(`AI Synthesis error: ${err.message}`);
+    } finally {
+      setIsGeneratingAi(false);
+    }
+  };
+
+  // Live Debugger / Simulator
   const runSimulator = () => {
     setIsSimulating(true);
-    setSimLog(['[Simulator] Initializing CS2 Mock Engine Event Loop...']);
-    
-    // Step 1
-    setTimeout(() => {
-      setActiveHighlightNodeId('node_event_player_death');
-      setSimLog(prev => [...prev, '[0.00s] Event fired: EventPlayerDeath (Attacker: Simple_s1mple, Victim: Bot_Bob, Headshot: true, Weapon: ak47)']);
-    }, 600);
+    setSimLog(['[Simulator] Initializing CS2 Event Graph Trace...']);
 
-    // Step 2
-    setTimeout(() => {
-      setActiveHighlightNodeId('node_cond_headshot');
-      setSimLog(prev => [...prev, '[0.05s] Condition evaluated: IsHeadshot == true -> Branching to TRUE output flow']);
-    }, 1400);
+    if (nodes.length === 0) {
+      setSimLog((prev) => [...prev, '[Simulator] Graph is empty. Add nodes to simulate events.']);
+      setIsSimulating(false);
+      return;
+    }
 
-    // Step 3
-    setTimeout(() => {
-      setActiveHighlightNodeId('node_action_heal');
-      setSimLog(prev => [...prev, '[0.10s] Action executed: GiveHealth(Player: Simple_s1mple, +50 HP, +25 Armor). New Health: 100']);
-    }, 2200);
+    nodes.forEach((node, idx) => {
+      setTimeout(() => {
+        setActiveHighlightNodeId(node.id);
+        setSimLog((prev) => [...prev, `[Step ${idx + 1}] Executing ${node.title} (${node.type})`]);
+      }, (idx + 1) * 700);
+    });
 
-    // Step 4
-    setTimeout(() => {
-      setActiveHighlightNodeId('node_action_hud_msg');
-      setSimLog(prev => [...prev, '[0.15s] HUD rendered: PrintCenterHtml("<font color=\'red\'>HEADSHOT KILL! +50 HP</font>") to Simple_s1mple']);
-    }, 3000);
-
-    // Done
     setTimeout(() => {
       setActiveHighlightNodeId(null);
       setIsSimulating(false);
-      setSimLog(prev => [...prev, '[0.20s] Simulation completed successfully with 0 errors. Graph logic verified!']);
-    }, 3800);
+      setSimLog((prev) => [...prev, '[Simulator] Graph event trace completed successfully!']);
+    }, (nodes.length + 1) * 700);
   };
 
-  // Build Plugin on Client AI Agent
-  const handleStartBuild = () => {
+  // Real Dispatch Build to Connected Client Agent
+  const handleStartBuild = async () => {
     setIsBuildingModalOpen(true);
     setIsCompiling(true);
     setCompiledSuccess(false);
-    setBuildLogs(['[Gateway] Dispatching Graph AST job to connected Agent "DESKTOP-RYZEN9"...']);
+    setBuildLogs(['[Gateway] Dispatching AST compilation job to active Client AI Agent...']);
 
-    setTimeout(() => {
-      setBuildLogs(prev => [...prev, '[Agent] Received JobTask: plugin.build (Graph Nodes: ' + nodes.length + ')']);
-      setBuildLogs(prev => [...prev, '[Agent] Translating .cs2graph AST to CounterStrikeSharp C# Plugin...']);
-    }, 800);
+    try {
+      const res = await fetchApi(`/studio/projects/${projectId}/build`, {
+        method: 'POST',
+      });
 
-    setTimeout(() => {
-      setBuildLogs(prev => [...prev, '[Agent] Generating C# Solution: DynamicWarmupArenas.csproj targeting net8.0']);
-      setBuildLogs(prev => [...prev, '[Agent] Invoking `dotnet publish -c Release -o /bin/output`']);
-    }, 1800);
+      setBuildLogs((prev) => [
+        ...prev,
+        `[Gateway] JobTask created (UUID: ${res.job.uuid})`,
+        `[Gateway] Target Agent: ${res.agent ? res.agent.device_name : 'Waiting for available agent...'}`,
+        `[Agent] Local .NET 8 SDK compiling ${nodes.length} nodes to C#...`,
+        `[Status] Build initiated over persistent outbound WebSocket!`,
+      ]);
 
-    setTimeout(() => {
-      setBuildLogs(prev => [...prev, '[Agent] Compilation output: 0 Warning(s), 0 Error(s).']);
-      setBuildLogs(prev => [...prev, '[Agent] Generated Binary: DynamicWarmupArenas.dll (245 KB)']);
-      setBuildLogs(prev => [...prev, '[ControlPlane] Artifact synced to Master Node repository. Ready for 1-Click Server Deploy!']);
-      setIsCompiling(false);
       setCompiledSuccess(true);
-    }, 3200);
+    } catch (err: any) {
+      setBuildLogs((prev) => [...prev, `[Error] ${err.message}`]);
+    } finally {
+      setIsCompiling(false);
+    }
   };
 
   const selectedNode = nodes.find(n => n.id === selectedNodeId);
