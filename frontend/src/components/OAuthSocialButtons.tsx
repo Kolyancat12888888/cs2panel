@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { fetchApi } from '@/lib/api';
+import { fetchApi, getApiBase } from '@/lib/api';
 
 interface OAuthProvider {
   id: number;
