@@ -472,6 +472,10 @@ export default function VisualStudioCanvasPage() {
                   setActiveHighlightNodeId(firstNodeId);
                   setTimeout(() => setActiveHighlightNodeId(null), 3000);
                 }
+
+                if (parsedGraph.nodes.length >= 30) {
+                  setZoom(0.5);
+                }
               }
 
               setTimeout(() => setBackgroundAiJob(null), 4000);
