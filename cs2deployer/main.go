@@ -81,27 +81,33 @@ func main() {
 
 	printBanner()
 
+	absTarget, err := filepath.Abs(*targetDirFlag)
+	if err != nil {
+		absTarget = *targetDirFlag
+	}
+
 	cfg := &Config{
 		GitHubRepo:    *repoFlag,
-		TargetDir:     *targetDirFlag,
-		BackendDir:    filepath.Join(*targetDirFlag, "backend"),
-		FrontendDir:   filepath.Join(*targetDirFlag, "frontend"),
+		TargetDir:     absTarget,
+		BackendDir:    filepath.Join(absTarget, "backend"),
+		FrontendDir:   filepath.Join(absTarget, "frontend"),
 		BackendPort:   *backendPortFlag,
 		FrontendPort:  *frontendPortFlag,
 		CheckInterval: *checkIntervalFlag,
 		AutoUpdate:    !*runOnlyFlag,
-		BackupDir:     filepath.Join(*targetDirFlag, "_backup"),
+		BackupDir:     filepath.Join(absTarget, "_backup"),
 	}
 
 	// Load override from deployer_config.json if present
-	configFile := filepath.Join(*targetDirFlag, "deployer_config.json")
+	configFile := filepath.Join(absTarget, "deployer_config.json")
 	if data, err := os.ReadFile(configFile); err == nil {
 		_ = json.Unmarshal(data, cfg)
 		log.Printf("[DEPLOYER] Loaded configuration from %s", configFile)
 	}
 
-	absTarget, _ := filepath.Abs(cfg.TargetDir)
-	log.Printf("[DEPLOYER] Target Directory: %s", absTarget)
+	log.Printf("[DEPLOYER] Target Directory: %s", cfg.TargetDir)
+	log.Printf("[DEPLOYER] Backend Directory: %s", cfg.BackendDir)
+	log.Printf("[DEPLOYER] Frontend Directory: %s", cfg.FrontendDir)
 	log.Printf("[DEPLOYER] GitHub Repository: https://github.com/%s", cfg.GitHubRepo)
 	log.Printf("[DEPLOYER] Services to manage: Backend (artisan :%s) + Frontend (npm :%s)", cfg.BackendPort, cfg.FrontendPort)
 
@@ -337,26 +343,33 @@ func downloadFile(url string, dest string) error {
 }
 
 func unzipArchive(src, dest string) error {
+	destAbs, err := filepath.Abs(dest)
+	if err != nil {
+		destAbs = dest
+	}
+
 	r, err := zip.OpenReader(src)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
 
+	count := 0
 	for _, f := range r.File {
-		fpath := filepath.Join(dest, f.Name)
+		fpath := filepath.Join(destAbs, f.Name)
 
 		// Security: Prevent ZipSlip vulnerability
-		if !strings.HasPrefix(filepath.Clean(fpath), filepath.Clean(dest)) {
+		rel, err := filepath.Rel(destAbs, fpath)
+		if err != nil || strings.HasPrefix(rel, "..") {
 			continue
 		}
 
 		if f.FileInfo().IsDir() {
-			_ = os.MkdirAll(fpath, os.ModePerm)
+			_ = os.MkdirAll(fpath, 0755)
 			continue
 		}
 
-		if err := os.MkdirAll(filepath.Dir(fpath), os.ModePerm); err != nil {
+		if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
 			return err
 		}
 
@@ -377,7 +390,9 @@ func unzipArchive(src, dest string) error {
 		if err != nil {
 			return err
 		}
+		count++
 	}
+	log.Printf("[DEPLOYER] Unpacked %d files into %s", count, destAbs)
 	return nil
 }
 
