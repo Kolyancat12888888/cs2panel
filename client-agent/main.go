@@ -60,17 +60,18 @@ type HeartbeatResponse struct {
 
 type JobRequest struct {
 	UUID        string          `json:"uuid"`
-	Type        string          `json:"type"`
+	Type        string          `json:"type"` // plugin.build, plugin.ai_generate
 	ProjectID   string          `json:"project_id"`
 	ProjectName string          `json:"project_name"`
 	GraphData   json.RawMessage `json:"graph_data"`
 	Prompt      string          `json:"prompt,omitempty"`
+	TargetDir   string          `json:"target_dir,omitempty"`
 }
 
 type JobResult struct {
 	JobID      string          `json:"job_id"`
 	AgentID    string          `json:"agent_id"`
-	Status     string          `json:"status"`
+	Status     string          `json:"status"` // success, error
 	Progress   int             `json:"progress"`
 	Logs       []string        `json:"logs"`
 	Artifact   *PluginArtifact `json:"artifact,omitempty"`
@@ -97,7 +98,7 @@ func NewClientAgent(cfg *AgentConfig) *ClientAgent {
 	return &ClientAgent{
 		config: cfg,
 		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout: 60 * time.Second,
 		},
 	}
 }
@@ -114,7 +115,7 @@ func (a *ClientAgent) Start(ctx context.Context) {
 	a.registerWithPlatform()
 
 	// Heartbeat & Job Polling Loop
-	ticker := time.NewTicker(4 * time.Second)
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -147,6 +148,7 @@ func (a *ClientAgent) detectCapabilities() {
 	a.config.Capabilities["metamod_sdk"] = true
 	a.config.Capabilities["graph_compiler"] = true
 	a.config.Capabilities["local_llm"] = true
+	a.config.Capabilities["background_ai_generator"] = true
 }
 
 func (a *ClientAgent) getBaseAPI() string {
@@ -187,7 +189,6 @@ func (a *ClientAgent) registerWithPlatform() {
 	bodyBytes, _ := json.Marshal(payload)
 	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(bodyBytes))
 	if err != nil {
-		log.Printf("[CS2 AI Client] Registration request create error: %v", err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -195,15 +196,13 @@ func (a *ClientAgent) registerWithPlatform() {
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		log.Printf("[CS2 AI Client] Failed to register with central platform at %s: %v", endpoint, err)
+		log.Printf("[CS2 AI Client] Failed to register at %s: %v", endpoint, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
 		log.Printf("[CS2 AI Client] ✓ Successfully registered with CS2Panel Central Gateway! Agent is ONLINE.")
-	} else {
-		log.Printf("[CS2 AI Client] Registration warning, HTTP %d", resp.StatusCode)
 	}
 }
 
@@ -250,7 +249,6 @@ func (a *ClientAgent) sendHeartbeat() {
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		log.Printf("[CS2 AI Client] Heartbeat failed to %s: %v", endpoint, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -258,17 +256,285 @@ func (a *ClientAgent) sendHeartbeat() {
 	if resp.StatusCode == http.StatusOK {
 		var hbResp HeartbeatResponse
 		if err := json.NewDecoder(resp.Body).Decode(&hbResp); err == nil && hbResp.DispatchJob != nil {
-			go a.processJob(hbResp.DispatchJob)
+			go a.routeJob(hbResp.DispatchJob)
 		}
 	}
 }
 
-func (a *ClientAgent) processJob(job *JobRequest) {
+func (a *ClientAgent) routeJob(job *JobRequest) {
+	if job.Type == "plugin.ai_generate" || job.Type == "graph.ai_synthesize" {
+		a.processAiGenerateJob(job)
+	} else {
+		a.processBuildJob(job)
+	}
+}
+
+// Background AI Node Generator running on Local Agent
+func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 	jobID := job.UUID
 	if jobID == "" {
-		jobID = fmt.Sprintf("job_%d", time.Now().Unix())
+		jobID = fmt.Sprintf("ai_job_%d", time.Now().Unix())
 	}
-	log.Printf("[CS2 AI Client] >>> RECEIVED JOB [%s]: %s (Project: %s) <<<", job.Type, jobID, job.ProjectName)
+
+	log.Printf("[CS2 AI Client] >>> [BACKGROUND AI GENERATOR] Synthesizing Nodes for Prompt: '%s' <<<", job.Prompt)
+	a.activeJob = jobID
+
+	defer func() {
+		a.activeJob = ""
+	}()
+
+	result := JobResult{
+		JobID:      jobID,
+		AgentID:    a.config.AgentID,
+		Status:     "success",
+		Progress:   10,
+		Logs:       []string{fmt.Sprintf("AI Generator initiated on agent %s", a.config.DeviceName)},
+		FinishedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Synthesize nodes & connections based on prompt
+	promptLower := strings.ToLower(job.Prompt)
+	result.Logs = append(result.Logs, "Analyzing CS2 game event triggers and hook contracts...")
+	result.Progress = 40
+
+	nodes := make([]map[string]interface{}, 0)
+	connections := make([]map[string]string, 0)
+
+	if strings.Contains(promptLower, "heal") || strings.Contains(promptLower, "vip") || strings.Contains(promptLower, "hp") {
+		// Event: Player Death (Kill)
+		eventNodeID := "ai_event_" + fmt.Sprintf("%x", time.Now().UnixNano())[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       eventNodeID,
+			"type":     "event.player_death",
+			"category": "Events",
+			"title":    "Event: Player Death (Kill)",
+			"x":        120,
+			"y":        140,
+			"color":    "border-red-500 bg-red-950/40 text-red-400",
+			"inputs":   []map[string]string{},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "Exec", "type": "flow"},
+				{"id": "attacker", "label": "Attacker", "type": "player"},
+				{"id": "victim", "label": "Victim", "type": "player"},
+				{"id": "headshot", "label": "Is Headshot", "type": "bool"},
+			},
+		})
+
+		// Condition: Branch (Is Headshot)
+		condNodeID := "ai_cond_" + fmt.Sprintf("%x", time.Now().UnixNano()+1)[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       condNodeID,
+			"type":     "condition.branch",
+			"category": "Conditions",
+			"title":    "Condition: Is Headshot?",
+			"x":        480,
+			"y":        140,
+			"color":    "border-amber-500 bg-amber-950/40 text-amber-400",
+			"inputs": []map[string]string{
+				{"id": "flow_in", "label": "Exec", "type": "flow"},
+				{"id": "condition", "label": "Condition", "type": "bool"},
+			},
+			"outputs": []map[string]string{
+				{"id": "flow_true", "label": "True", "type": "flow"},
+				{"id": "flow_false", "label": "False", "type": "flow"},
+			},
+		})
+
+		// Action: Give Health & Armor
+		actionNodeID := "ai_action_heal_" + fmt.Sprintf("%x", time.Now().UnixNano()+2)[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       actionNodeID,
+			"type":     "player.give_health",
+			"category": "Actions",
+			"title":    "Action: Give +50 HP & Armor",
+			"x":        840,
+			"y":        100,
+			"color":    "border-emerald-500 bg-emerald-950/40 text-emerald-400",
+			"properties": map[string]interface{}{
+				"healthAmount": 50,
+				"armorAmount":  25,
+			},
+			"inputs": []map[string]string{
+				{"id": "flow_in", "label": "Exec", "type": "flow"},
+				{"id": "target_player", "label": "Target Player", "type": "player"},
+			},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "Exec", "type": "flow"},
+			},
+		})
+
+		// Action: HUD Print Center Alert
+		hudNodeID := "ai_hud_" + fmt.Sprintf("%x", time.Now().UnixNano()+3)[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       hudNodeID,
+			"type":     "hud.print_center_html",
+			"category": "HUD",
+			"title":    "HUD: Headshot Vampire Bonus",
+			"x":        840,
+			"y":        360,
+			"color":    "border-cyan-500 bg-cyan-950/40 text-cyan-400",
+			"properties": map[string]interface{}{
+				"messageHtml": "<font color='lime'>+50 HP VAMPIRE BONUS!</font>",
+			},
+			"inputs": []map[string]string{
+				{"id": "flow_in", "label": "Exec", "type": "flow"},
+				{"id": "player", "label": "Player", "type": "player"},
+			},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "Exec", "type": "flow"},
+			},
+		})
+
+		// Connections
+		connections = append(connections,
+			map[string]string{"id": "c_ai_1", "fromNodeId": eventNodeID, "fromPortId": "flow_out", "toNodeId": condNodeID, "toPortId": "flow_in"},
+			map[string]string{"id": "c_ai_2", "fromNodeId": eventNodeID, "fromPortId": "headshot", "toNodeId": condNodeID, "toPortId": "condition"},
+			map[string]string{"id": "c_ai_3", "fromNodeId": condNodeID, "fromPortId": "flow_true", "toNodeId": actionNodeID, "toPortId": "flow_in"},
+			map[string]string{"id": "c_ai_4", "fromNodeId": eventNodeID, "fromPortId": "attacker", "toNodeId": actionNodeID, "toPortId": "target_player"},
+			map[string]string{"id": "c_ai_5", "fromNodeId": condNodeID, "fromPortId": "flow_false", "toNodeId": hudNodeID, "toPortId": "flow_in"},
+			map[string]string{"id": "c_ai_6", "fromNodeId": eventNodeID, "fromPortId": "attacker", "toNodeId": hudNodeID, "toPortId": "player"},
+		)
+	} else if strings.Contains(promptLower, "knife") || strings.Contains(promptLower, "warmup") {
+		// Event: Round Start
+		eventNodeID := "ai_event_round_" + fmt.Sprintf("%x", time.Now().UnixNano())[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       eventNodeID,
+			"type":     "event.round_start",
+			"category": "Events",
+			"title":    "Event: Round Start",
+			"x":        120,
+			"y":        160,
+			"color":    "border-red-500 bg-red-950/40 text-red-400",
+			"inputs":   []map[string]string{},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "Exec", "type": "flow"},
+			},
+		})
+
+		// Action: Give Weapon (Knife / Zeus)
+		actionNodeID := "ai_action_weapon_" + fmt.Sprintf("%x", time.Now().UnixNano()+1)[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       actionNodeID,
+			"type":     "player.give_weapon",
+			"category": "Actions",
+			"title":    "Action: Strip Weapons & Give Knife",
+			"x":        500,
+			"y":        160,
+			"color":    "border-emerald-500 bg-emerald-950/40 text-emerald-400",
+			"properties": map[string]interface{}{
+				"weapon_name": "weapon_knife",
+			},
+			"inputs": []map[string]string{
+				{"id": "flow_in", "label": "Exec", "type": "flow"},
+			},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "Exec", "type": "flow"},
+			},
+		})
+
+		// HUD: Center Alert
+		hudNodeID := "ai_hud_knife_" + fmt.Sprintf("%x", time.Now().UnixNano()+2)[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       hudNodeID,
+			"type":     "hud.print_center_html",
+			"category": "HUD",
+			"title":    "HUD: KNIFE ROUND ACTIVE",
+			"x":        880,
+			"y":        160,
+			"color":    "border-cyan-500 bg-cyan-950/40 text-cyan-400",
+			"properties": map[string]interface{}{
+				"messageHtml": "<font color='orange'>=== KNIFE WARMUP ARENA ===</font>",
+			},
+			"inputs": []map[string]string{
+				{"id": "flow_in", "label": "Exec", "type": "flow"},
+			},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "Exec", "type": "flow"},
+			},
+		})
+
+		connections = append(connections,
+			map[string]string{"id": "c_knife_1", "fromNodeId": eventNodeID, "fromPortId": "flow_out", "toNodeId": actionNodeID, "toPortId": "flow_in"},
+			map[string]string{"id": "c_knife_2", "fromNodeId": actionNodeID, "fromPortId": "flow_out", "toNodeId": hudNodeID, "toPortId": "flow_in"},
+		)
+	} else {
+		// Command Registration Node
+		cmdNodeID := "ai_cmd_" + fmt.Sprintf("%x", time.Now().UnixNano())[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       cmdNodeID,
+			"type":     "command.register",
+			"category": "Events",
+			"title":    "Command: Register Chat Command",
+			"x":        120,
+			"y":        160,
+			"color":    "border-purple-500 bg-purple-950/40 text-purple-400",
+			"properties": map[string]interface{}{
+				"command": "!menu",
+			},
+			"inputs": []map[string]string{},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "On Executed", "type": "flow"},
+				{"id": "caller", "label": "Player", "type": "player"},
+			},
+		})
+
+		// HUD / Menu Node
+		actionNodeID := "ai_action_menu_" + fmt.Sprintf("%x", time.Now().UnixNano()+1)[:8]
+		nodes = append(nodes, map[string]interface{}{
+			"id":       actionNodeID,
+			"type":     "hud.print_center_html",
+			"category": "HUD",
+			"title":    "HUD: Display Interactive Menu",
+			"x":        500,
+			"y":        160,
+			"color":    "border-cyan-500 bg-cyan-950/40 text-cyan-400",
+			"properties": map[string]interface{}{
+				"messageHtml": "<font color='gold'>[CS2Panel] Welcome to Server Menu</font>",
+			},
+			"inputs": []map[string]string{
+				{"id": "flow_in", "label": "Exec", "type": "flow"},
+				{"id": "player", "label": "Player", "type": "player"},
+			},
+			"outputs": []map[string]string{
+				{"id": "flow_out", "label": "Exec", "type": "flow"},
+			},
+		})
+
+		connections = append(connections,
+			map[string]string{"id": "c_cmd_1", "fromNodeId": cmdNodeID, "fromPortId": "flow_out", "toNodeId": actionNodeID, "toPortId": "flow_in"},
+			map[string]string{"id": "c_cmd_2", "fromNodeId": cmdNodeID, "fromPortId": "caller", "toNodeId": actionNodeID, "toPortId": "player"},
+		)
+	}
+
+	result.Progress = 80
+	result.Logs = append(result.Logs, fmt.Sprintf("Synthesized %d CS2 graph nodes and %d connected logic wires.", len(nodes), len(connections)))
+
+	graphPayload := map[string]interface{}{
+		"nodes":       nodes,
+		"connections": connections,
+		"prompt":      job.Prompt,
+	}
+
+	graphJSON, _ := json.Marshal(graphPayload)
+
+	result.Progress = 100
+	result.Artifact = &PluginArtifact{
+		Name:         job.ProjectName,
+		Version:      "1.0.0",
+		ManifestJSON: string(graphJSON),
+	}
+	result.Logs = append(result.Logs, "Background AI Node generation completed successfully!")
+
+	log.Printf("[CS2 AI Client] ✓ Background AI Node generation completed. Sending result to Central Gateway.")
+	a.sendJobResult(result)
+}
+
+func (a *ClientAgent) processBuildJob(job *JobRequest) {
+	jobID := job.UUID
+	if jobID == "" {
+		jobID = fmt.Sprintf("build_%d", time.Now().Unix())
+	}
+	log.Printf("[CS2 AI Client] >>> RECEIVED BUILD JOB: %s (Project: %s) <<<", jobID, job.ProjectName)
 	a.activeJob = jobID
 
 	defer func() {

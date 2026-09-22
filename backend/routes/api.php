@@ -68,6 +68,7 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     Route::get('/studio/projects/{id}', [PluginStudioController::class, 'show']);
     Route::put('/studio/projects/{id}', [PluginStudioController::class, 'update']);
     Route::post('/studio/ai-generate', [PluginStudioController::class, 'generateAiNodes']);
+    Route::post('/studio/ai-generate-async', [PluginStudioController::class, 'dispatchAiGenerate']);
     Route::post('/studio/projects/{id}/build', [PluginStudioController::class, 'dispatchBuild']);
     Route::post('/studio/projects/{id}/deploy', [PluginStudioController::class, 'deployToServer']);
 

@@ -230,6 +230,43 @@ class PluginStudioController extends Controller
         ]);
     }
 
+    // Dispatch Background AI Node Generation to Client Agent
+    public function dispatchAiGenerate(Request $request)
+    {
+        $request->validate(['prompt' => 'required|string']);
+        $user = $request->user();
+
+        // Find user's active client agent
+        $agent = Agent::where('user_id', $user->id)
+            ->where('status', 'ready')
+            ->first();
+
+        if (!$agent) {
+            $agent = Agent::where('status', 'ready')->first();
+        }
+
+        $job = JobTask::create([
+            'uuid' => (string) Str::uuid(),
+            'user_id' => $user->id,
+            'agent_id' => $agent ? $agent->agent_id : null,
+            'type' => 'plugin.ai_generate',
+            'priority' => 'high',
+            'status' => 'pending',
+            'payload' => [
+                'prompt' => $request->prompt,
+                'project_id' => $request->project_id ?? null,
+                'project_name' => $request->project_name ?? 'AiGeneratedPlugin',
+            ],
+            'logs' => ['Queued for Background Client AI Agent synthesis...'],
+        ]);
+
+        return response()->json([
+            'message' => 'Background AI Node Generation job queued.',
+            'job' => $job,
+            'agent' => $agent,
+        ], 202);
+    }
+
     // Dispatch Build Job to local Client AI Agent
     public function dispatchBuild($id, Request $request)
     {

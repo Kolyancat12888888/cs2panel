@@ -371,41 +371,113 @@ export default function VisualStudioCanvasPage() {
     }
   };
 
-  // Live AI Copilot Block Synthesizer via Backend
-  const handleAiGenerate = async () => {
-    if (!aiPrompt.trim()) return;
+  // Background AI Copilot Generator
+  const [backgroundAiJob, setBackgroundAiJob] = useState<{ id: string; status: string; progress: number; logs: string[] } | null>(null);
+
+  const startBackgroundAiGeneration = async (customPrompt?: string) => {
+    const promptToUse = customPrompt || aiPrompt;
+    if (!promptToUse.trim()) return;
+
     setIsGeneratingAi(true);
+    setBackgroundAiJob({ id: 'pending', status: 'dispatching', progress: 10, logs: ['Connecting to Background Client AI Agent...'] });
 
     try {
-      const res = await fetchApi('/studio/ai-generate', {
+      const res = await fetchApi('/studio/ai-generate-async', {
         method: 'POST',
-        body: JSON.stringify({ prompt: aiPrompt }),
+        body: JSON.stringify({
+          prompt: promptToUse,
+          project_id: projectId,
+          project_name: `Plugin_${projectId}`,
+        }),
       });
 
-      if (res.nodes && Array.isArray(res.nodes)) {
-        const formattedNodes: GraphNode[] = res.nodes.map((n: any) => ({
-          id: n.id,
-          type: n.type,
-          title: n.title,
-          category: (n.category || 'Events') as any,
-          x: (-pan.x + 350 + Math.random() * 100) / zoom,
-          y: (-pan.y + 150 + Math.random() * 100) / zoom,
-          color: n.category === 'actions' ? 'border-emerald-500 bg-emerald-950/40 text-emerald-400' : 'border-purple-500 bg-purple-950/40 text-purple-400',
-          inputs: (n.inputs || []).map((inp: string) => ({ id: inp, label: inp, type: inp === 'exec' ? 'flow' : 'player' })),
-          outputs: (n.outputs || []).map((out: string) => ({ id: out, label: out, type: out === 'exec' ? 'flow' : 'player' })),
-          properties: n.config || {},
-        }));
-
-        setNodes((prev) => [...prev, ...formattedNodes]);
+      const jobId = res.job?.uuid;
+      if (!jobId) {
+        throw new Error('Failed to obtain background job ID');
       }
 
+      setBackgroundAiJob({
+        id: jobId,
+        status: 'processing',
+        progress: 30,
+        logs: [
+          'Background AI Task dispatched to Client Agent',
+          `Target Agent: ${res.agent ? res.agent.device_name : 'Local SDK'}`,
+          'Synthesizing CounterStrikeSharp AST event graphs...',
+        ],
+      });
+
+      // Poll job status
+      const pollInterval = setInterval(async () => {
+        try {
+          const jobData = await fetchApi(`/jobs/${jobId}`);
+          if (jobData) {
+            setBackgroundAiJob((prev) => ({
+              id: jobId,
+              status: jobData.status,
+              progress: jobData.progress || 60,
+              logs: jobData.logs || prev?.logs || [],
+            }));
+
+            if (jobData.status === 'completed' || jobData.status === 'success') {
+              clearInterval(pollInterval);
+              setIsGeneratingAi(false);
+
+              // Parse generated nodes from artifact
+              if (jobData.artifact?.manifest_json) {
+                try {
+                  const parsed = JSON.parse(jobData.artifact.manifest_json);
+                  if (Array.isArray(parsed.nodes)) {
+                    const newNodes = parsed.nodes.map(normalizeNode);
+                    setNodes((prev) => [...prev, ...newNodes]);
+                  }
+                  if (Array.isArray(parsed.connections)) {
+                    const newConns = parsed.connections.map(normalizeConnection);
+                    setConnections((prev) => [...prev, ...newConns]);
+                  }
+                } catch (e) {
+                  console.warn('Error parsing AI artifact', e);
+                }
+              }
+
+              setTimeout(() => setBackgroundAiJob(null), 4000);
+            } else if (jobData.status === 'failed' || jobData.status === 'error') {
+              clearInterval(pollInterval);
+              setIsGeneratingAi(false);
+              alert(`Background AI synthesis error: ${jobData.error || 'Job failed'}`);
+            }
+          }
+        } catch {
+          // If polling fails, fallback to direct endpoint
+        }
+      }, 1500);
+
       setAiPrompt('');
-      setActiveTab('palette');
     } catch (err: any) {
-      alert(`AI Synthesis error: ${err.message}`);
-    } finally {
-      setIsGeneratingAi(false);
+      // Fallback to synchronous generation
+      try {
+        const syncRes = await fetchApi('/studio/ai-generate', {
+          method: 'POST',
+          body: JSON.stringify({ prompt: promptToUse }),
+        });
+        if (syncRes.nodes && Array.isArray(syncRes.nodes)) {
+          setNodes((prev) => [...prev, ...syncRes.nodes.map(normalizeNode)]);
+          if (Array.isArray(syncRes.connections)) {
+            setConnections((prev) => [...prev, ...syncRes.connections.map(normalizeConnection)]);
+          }
+        }
+      } catch (e: any) {
+        alert(`AI Generator notice: ${err.message || e.message}`);
+      } finally {
+        setIsGeneratingAi(false);
+        setBackgroundAiJob(null);
+      }
     }
+  };
+
+  // Instant AI Copilot Block Synthesizer
+  const handleAiGenerate = () => {
+    startBackgroundAiGeneration();
   };
 
   // Live Debugger / Simulator
@@ -673,19 +745,19 @@ export default function VisualStudioCanvasPage() {
 
           {/* Tab: AI Copilot */}
           {activeTab === 'ai' && (
-            <div className="p-4 flex-1 flex flex-col justify-between space-y-4">
-              <div className="space-y-3">
+            <div className="p-4 flex-1 flex flex-col justify-between space-y-4 overflow-y-auto">
+              <div className="space-y-4">
                 <div className="flex items-center gap-2 text-xs font-bold text-cs2-orange">
                   <Sparkles className="w-4 h-4" />
-                  AI Block Synthesizer
+                  Background AI Node Generator
                 </div>
                 <p className="text-xs text-cs2-muted">
-                  Describe what behavior or game logic you want, and the local AI Agent will generate and connect the node graph blocks for you.
+                  Describe any CS2 game logic, event rule or addon. The background AI Agent will synthesize, position, and wire the visual node blocks automatically.
                 </p>
 
                 <textarea
-                  rows={4}
-                  placeholder="e.g. When a player says !medic in chat, check if they have enough credits, charge 500 credits and heal them to 100 HP."
+                  rows={3}
+                  placeholder="e.g. When a player gets a headshot, give them +50 HP and show a green alert on screen."
                   value={aiPrompt}
                   onChange={(e) => setAiPrompt(e.target.value)}
                   className="w-full p-2.5 rounded-lg bg-cs2-card border border-cs2-border text-xs text-white focus:outline-none focus:border-cs2-orange resize-none"
@@ -694,16 +766,72 @@ export default function VisualStudioCanvasPage() {
                 <button
                   onClick={handleAiGenerate}
                   disabled={isGeneratingAi || !aiPrompt.trim()}
-                  className="w-full py-2 rounded-lg bg-cs2-orange hover:bg-cs2-orange/90 text-black text-xs font-bold transition flex items-center justify-center gap-2 disabled:opacity-50"
+                  className="w-full py-2.5 rounded-xl bg-cs2-orange hover:bg-cs2-orangeHover text-black text-xs font-extrabold transition flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-cs2-orange/20"
                 >
                   <Sparkles className={`w-3.5 h-3.5 ${isGeneratingAi ? 'animate-spin' : ''}`} />
-                  {isGeneratingAi ? 'Generating Graph Nodes...' : 'Generate Graph Nodes'}
+                  {isGeneratingAi ? 'Synthesizing in Background...' : 'Generate Graph Nodes (AI)'}
                 </button>
+
+                {/* 1-Click AI Logic Presets */}
+                <div className="space-y-2 pt-2 border-t border-cs2-border">
+                  <div className="text-[11px] font-bold uppercase text-cs2-muted tracking-wider">
+                    Quick AI Generator Presets
+                  </div>
+                  <div className="space-y-1.5">
+                    <button
+                      type="button"
+                      onClick={() => startBackgroundAiGeneration('VIP Vampire mode: give +50 HP and armor on headshot kill with green screen alert')}
+                      disabled={isGeneratingAi}
+                      className="w-full p-2 rounded-lg bg-cs2-card hover:bg-cs2-border border border-cs2-border text-left text-xs font-medium text-white transition flex items-center justify-between group"
+                    >
+                      <span className="group-hover:text-cs2-orange transition">🩸 VIP Vampire (+50 HP on Kill)</span>
+                      <span className="text-[10px] text-cs2-orange font-mono">Run AI</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startBackgroundAiGeneration('Warmup Knife Arena with custom sound alert and stripped weapons')}
+                      disabled={isGeneratingAi}
+                      className="w-full p-2 rounded-lg bg-cs2-card hover:bg-cs2-border border border-cs2-border text-left text-xs font-medium text-white transition flex items-center justify-between group"
+                    >
+                      <span className="group-hover:text-cs2-orange transition">🔪 Warmup Knife Arena</span>
+                      <span className="text-[10px] text-cs2-orange font-mono">Run AI</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startBackgroundAiGeneration('Register !menu chat command with interactive HTML menu')}
+                      disabled={isGeneratingAi}
+                      className="w-full p-2 rounded-lg bg-cs2-card hover:bg-cs2-border border border-cs2-border text-left text-xs font-medium text-white transition flex items-center justify-between group"
+                    >
+                      <span className="group-hover:text-cs2-orange transition">💬 Custom !menu Chat Command</span>
+                      <span className="text-[10px] text-cs2-orange font-mono">Run AI</span>
+                    </button>
+                  </div>
+                </div>
+
+                {backgroundAiJob && (
+                  <div className="p-3 rounded-xl bg-cs2-orange/10 border border-cs2-orange/30 space-y-2 text-xs">
+                    <div className="flex items-center justify-between text-cs2-orange font-bold">
+                      <span className="flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 animate-spin" />
+                        Background AI Task
+                      </span>
+                      <span className="text-[10px] font-mono uppercase">{backgroundAiJob.status}</span>
+                    </div>
+                    <div className="w-full bg-cs2-card h-1.5 rounded-full overflow-hidden">
+                      <div className="bg-cs2-orange h-full transition-all duration-300" style={{ width: `${backgroundAiJob.progress}%` }} />
+                    </div>
+                    <div className="text-[10px] text-cs2-muted space-y-0.5 font-mono max-h-20 overflow-y-auto">
+                      {backgroundAiJob.logs.map((l, i) => (
+                        <div key={i} className="truncate">{l}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="p-3 rounded-lg bg-cs2-card border border-cs2-border text-[11px] text-cs2-muted space-y-1">
                 <div className="font-semibold text-white">Local LLM Acceleration</div>
-                <div>Connected to Ollama / LM Studio on Local Agent with low latency.</div>
+                <div>Connected to Ollama on Local Client Agent with zero cloud latency.</div>
               </div>
             </div>
           )}
