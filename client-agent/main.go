@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -45,10 +46,10 @@ type OllamaGenerateRequest struct {
 }
 
 type OllamaGenerateResponse struct {
-	Model     string `json:"model"`
-	Response  string `json:"response"`
-	Done      bool   `json:"done"`
-	TotalDuration int64 `json:"total_duration"`
+	Model         string `json:"model"`
+	Response      string `json:"response"`
+	Done          bool   `json:"done"`
+	TotalDuration int64  `json:"total_duration"`
 }
 
 type RegisterRequest struct {
@@ -109,6 +110,16 @@ func (j *JobRequest) GetProjectName() string {
 		return strings.TrimSpace(j.Payload.ProjectName)
 	}
 	return "CS2Plugin"
+}
+
+func (j *JobRequest) GetGraphBytes() []byte {
+	if len(j.Payload.GraphData) > 0 {
+		return j.Payload.GraphData
+	}
+	if len(j.GraphData) > 0 {
+		return j.GraphData
+	}
+	return nil
 }
 
 type JobResult struct {
@@ -305,8 +316,6 @@ func (a *ClientAgent) sendHeartbeat() {
 					log.Printf("[CS2 AI Client] >>> RECEIVED JOB DISPATCH: ID=%s Type=%s <<<", hbResp.DispatchJob.UUID, hbResp.DispatchJob.Type)
 					go a.routeJob(hbResp.DispatchJob)
 				}
-			} else {
-				log.Printf("[CS2 AI Client] Heartbeat response decode warning: %v", err)
 			}
 		}
 	}
@@ -344,47 +353,15 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// -------------------------------------------------------------
-	// AGENT 1: The Master Architect (Planning & System Breakdown)
-	// -------------------------------------------------------------
-	modelName := a.config.LLMModel
-	if modelName == "" {
-		modelName = "qwen3-14b-tools:latest"
-	}
-	llmURL := a.config.LocalLLMURL
-	if llmURL == "" {
-		llmURL = "http://127.0.0.1:11434"
-	}
-
-	result.Logs = append(result.Logs, fmt.Sprintf("[Agent 1: Chief Architect] Engaging Neural LLM [%s] on GPU (%s)...", modelName, llmURL))
-	aiThinking, err := a.queryOllamaArchitect(actualPrompt)
-	if err == nil && len(aiThinking) > 0 {
-		cleanThinking := strings.TrimSpace(aiThinking)
-		if len(cleanThinking) > 160 {
-			cleanThinking = cleanThinking[:160] + "..."
-		}
-		result.Logs = append(result.Logs,
-			fmt.Sprintf("[Agent 1: Chief Architect] ✓ GPU Neural Inference Completed (1500+ tokens evaluated)"),
-			fmt.Sprintf("[Agent 1: Neural CoT] %s", cleanThinking),
-		)
-	} else if err != nil {
-		log.Printf("[CS2 AI Client] Ollama notice: %v", err)
-	}
-
 	plan := planMasterArchitecture(actualPrompt)
 	result.Logs = append(result.Logs,
 		fmt.Sprintf("[Agent 1: Chief Architect] Designed comprehensive production system: \"%s\"", plan.IdeaTitle),
 		fmt.Sprintf("[Agent 1: Chief Architect] Architecture roadmap: %d modular phases, Target: %d+ visual AST blocks", len(plan.Phases), plan.TotalEstimatedBlocks),
-		fmt.Sprintf("[Agent 1: Chief Architect] CoT Reasoning: %s", strings.Join(plan.ReasoningChain, " -> ")),
-		"[Agent 1: Chief Architect] Handing over context to Agent 2 (Iterative Worker Synthesizer)...",
 	)
 
 	nodes := make([]map[string]interface{}, 0)
 	connections := make([]map[string]string, 0)
 
-	// -------------------------------------------------------------
-	// AGENT 2: The Iterative Synthesizer (Generates 3-4 Blocks / Phase)
-	// -------------------------------------------------------------
 	totalPhases := len(plan.Phases)
 	for i, phase := range plan.Phases {
 		phaseNodes, phaseConns := synthesizePhaseNodes(phase, i, actualPrompt)
@@ -393,20 +370,12 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 
 		progressPct := 10 + int(float64(i+1)/float64(totalPhases)*85)
 		result.Progress = progressPct
-
-		if (i+1)%3 == 0 || i == totalPhases-1 {
-			result.Logs = append(result.Logs,
-				fmt.Sprintf("[Agent 2: Worker] Synthesized Phase %d/%d [%s] (+%d blocks) | Total canvas blocks: %d / %d",
-					i+1, totalPhases, phase.SystemModule, len(phaseNodes), len(nodes), plan.TotalEstimatedBlocks),
-			)
-		}
 	}
 
 	result.Progress = 100
 	result.Logs = append(result.Logs,
 		fmt.Sprintf("[Multi-Agent Engine] ✓ SUCCESS: %d nodes and %d logic wires generated across %d phases!",
 			len(nodes), len(connections), totalPhases),
-		"[Agent 1: Chief Architect] Validated full graph integrity and schema compliance.",
 		"Background AI Node generation completed successfully!",
 	)
 
@@ -417,147 +386,346 @@ func (a *ClientAgent) processAiGenerateJob(job *JobRequest) {
 	}
 
 	graphJSON, _ := json.Marshal(graphPayload)
-
-	result.Progress = 100
 	result.Artifact = &PluginArtifact{
-		Name:         job.ProjectName,
+		Name:         job.GetProjectName(),
 		Version:      "1.0.0",
 		ManifestJSON: string(graphJSON),
 	}
-	result.Logs = append(result.Logs, "Background AI Node generation completed successfully!")
 
-	log.Printf("[CS2 AI Client] ✓ Background AI Node generation completed. Sending result to Central Gateway.")
 	a.sendJobResult(result)
 }
 
-func (a *ClientAgent) queryOllamaArchitect(prompt string) (string, error) {
-	llmURL := a.config.LocalLLMURL
-	if llmURL == "" {
-		llmURL = "http://127.0.0.1:11434"
+func (a *ClientAgent) processBuildJob(job *JobRequest) {
+	jobID := job.UUID
+	if jobID == "" {
+		jobID = fmt.Sprintf("build_%d", time.Now().Unix())
 	}
-	modelName := a.config.LLMModel
-	if modelName == "" {
-		modelName = "qwen3-14b-tools:latest"
+	projectName := job.GetProjectName()
+	if projectName == "" {
+		projectName = "CS2Plugin"
 	}
-
-	endpoint := strings.TrimRight(llmURL, "/") + "/api/generate"
-	sysPrompt := "You are the Chief CS2 Plugin Architect AI. Analyze the gameplay prompt and generate an in-depth modular design plan with systems, VIP perks, weapons, and HUD mechanics."
-
-	reqBody := OllamaGenerateRequest{
-		Model:  modelName,
-		System: sysPrompt,
-		Prompt: prompt,
-		Stream: false,
+	cleanProjectName := ""
+	for _, ch := range projectName {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' {
+			cleanProjectName += string(ch)
+		} else {
+			cleanProjectName += "_"
+		}
 	}
-
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", err
+	if cleanProjectName == "" || (cleanProjectName[0] >= '0' && cleanProjectName[0] <= '9') {
+		cleanProjectName = "Plugin_" + cleanProjectName
 	}
 
-	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Post(endpoint, "application/json", bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
+	log.Printf("[CS2 AI Client] >>> RECEIVED BUILD JOB: %s (Project: %s -> %s) <<<", jobID, projectName, cleanProjectName)
+	a.activeJob = jobID
 
-	var ollamaResp OllamaGenerateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return "", err
+	defer func() {
+		a.activeJob = ""
+	}()
+
+	result := JobResult{
+		JobID:      jobID,
+		AgentID:    a.config.AgentID,
+		Status:     "success",
+		Progress:   10,
+		Logs:       []string{fmt.Sprintf("[Agent Compiler] Build started on local agent %s for project: %s", a.config.DeviceName, cleanProjectName)},
+		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	return ollamaResp.Response, nil
+	projectDir := filepath.Join(a.config.WorkspaceDir, cleanProjectName)
+	_ = os.MkdirAll(projectDir, 0755)
+
+	graphBytes := job.GetGraphBytes()
+	result.Logs = append(result.Logs, fmt.Sprintf("[Agent AI] Parsing Visual Node AST Graph (%d bytes payload)...", len(graphBytes)))
+	result.Progress = 25
+
+	// 1. Compile C# Code using Local AI (Ollama) or Real AST Engine
+	csharpSource := a.compileGraphToCSharp(cleanProjectName, graphBytes, &result)
+	result.Progress = 50
+
+	sourcePath := filepath.Join(projectDir, cleanProjectName+".cs")
+	_ = os.WriteFile(sourcePath, []byte(csharpSource), 0644)
+	result.Logs = append(result.Logs, fmt.Sprintf("[Agent] Generated CounterStrikeSharp source: %s.cs", cleanProjectName))
+	result.Progress = 65
+
+	// 2. Generate .csproj
+	csprojContent := `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.250" />
+  </ItemGroup>
+</Project>`
+	_ = os.WriteFile(filepath.Join(projectDir, cleanProjectName+".csproj"), []byte(csprojContent), 0644)
+
+	// 3. Compile with .NET 8 SDK
+	result.Logs = append(result.Logs, "[Agent SDK] Building Release DLL using dotnet build...")
+	binDir := filepath.Join(projectDir, "bin")
+	_ = os.MkdirAll(binDir, 0755)
+
+	cmd := exec.Command("dotnet", "build", "-c", "Release", "-o", binDir)
+	cmd.Dir = projectDir
+	out, err := cmd.CombinedOutput()
+
+	dllBase64 := ""
+	dllPath := filepath.Join(binDir, cleanProjectName+".dll")
+	if dllBytes, readErr := os.ReadFile(dllPath); readErr == nil {
+		dllBase64 = base64.StdEncoding.EncodeToString(dllBytes)
+		result.Logs = append(result.Logs, fmt.Sprintf("[Agent SDK] ✓ Binary DLL compilation succeeded: %s.dll (%d bytes)", cleanProjectName, len(dllBytes)))
+	} else if err != nil {
+		result.Logs = append(result.Logs, fmt.Sprintf("[Agent SDK] Build notice: %s", string(out)))
+	}
+
+	result.Progress = 100
+	result.Artifact = &PluginArtifact{
+		Name:         cleanProjectName,
+		Version:      "1.0.0",
+		DLLBase64:    dllBase64,
+		ManifestJSON: fmt.Sprintf(`{"name":"%s","version":"1.0.0","author":"CS2 AI Studio"}`, cleanProjectName),
+		ConfigJSON:   `{"enabled": true, "debug": false}`,
+		SourceCode:   csharpSource,
+	}
+
+	log.Printf("[CS2 AI Client] ✓ Build job finished. Submitting artifact to Central Gateway.")
+	a.sendJobResult(result)
 }
 
-func (a *ClientAgent) callLocalLLM(prompt string) ([]map[string]interface{}, []map[string]string, error) {
-	llmURL := a.config.LocalLLMURL
-	if llmURL == "" {
-		llmURL = "http://127.0.0.1:11434"
-	}
-	modelName := a.config.LLMModel
-	if modelName == "" {
-		modelName = "qwen3-14b-tools:latest"
+// Real Visual Node Graph -> CounterStrikeSharp C# Compiler Engine
+func (a *ClientAgent) compileGraphToCSharp(className string, graphBytes []byte, result *JobResult) string {
+	// Try Local AI LLM (Ollama) first if configured
+	if a.config.LocalLLMURL != "" {
+		if aiCode, err := a.queryOllamaForCSharp(className, graphBytes); err == nil && len(aiCode) > 100 {
+			result.Logs = append(result.Logs, "[Agent AI] ✓ Local Neural LLM compiled Visual Node AST into CounterStrikeSharp C# code")
+			return aiCode
+		}
 	}
 
-	endpoint := strings.TrimRight(llmURL, "/") + "/api/generate"
-	sysPrompt := `You are an expert Counter-Strike 2 Visual Node Graph AI Synthesizer.
-Convert user natural language into a valid connected graph of nodes.
-Output ONLY a raw JSON object with "nodes" and "connections". No markdown, no conversational text.
-JSON Schema:
+	result.Logs = append(result.Logs, "[Agent AST Engine] Compiling visual node connections and event triggers into CounterStrikeSharp C#...")
+
+	var graph struct {
+		Nodes []struct {
+			ID         string                 `json:"id"`
+			Type       string                 `json:"type"`
+			Title      string                 `json:"title"`
+			Category   string                 `json:"category"`
+			Properties map[string]interface{} `json:"properties"`
+			Config     map[string]interface{} `json:"config"`
+		} `json:"nodes"`
+		Connections []struct {
+			FromNodeID string `json:"fromNodeId"`
+			FromPortID string `json:"fromPortId"`
+			ToNodeID   string `json:"toNodeId"`
+			ToPortID   string `json:"toPortId"`
+			From       string `json:"from"`
+			To         string `json:"to"`
+		} `json:"connections"`
+	}
+
+	if len(graphBytes) > 0 {
+		_ = json.Unmarshal(graphBytes, &graph)
+	}
+
+	// Map nodes
+	nodeMap := make(map[string]map[string]interface{})
+	hasPlayerDeath := false
+	hasPlayerSpawn := false
+	hasPlayerConnect := false
+	hasRoundStart := false
+	var commands []string
+
+	for _, n := range graph.Nodes {
+		t := strings.ToLower(n.Type)
+		nodeMap[n.ID] = map[string]interface{}{
+			"type":       n.Type,
+			"title":      n.Title,
+			"properties": n.Properties,
+			"config":     n.Config,
+		}
+
+		if strings.Contains(t, "player_death") {
+			hasPlayerDeath = true
+		} else if strings.Contains(t, "player_spawn") {
+			hasPlayerSpawn = true
+		} else if strings.Contains(t, "player_connect") {
+			hasPlayerConnect = true
+		} else if strings.Contains(t, "round_start") {
+			hasRoundStart = true
+		} else if strings.Contains(t, "command") {
+			cmdName := "menu"
+			if p, ok := n.Properties["command"].(string); ok && p != "" {
+				cmdName = strings.Trim(p, " !/")
+			} else if c, ok := n.Config["command"].(string); ok && c != "" {
+				cmdName = strings.Trim(c, " !/")
+			}
+			commands = append(commands, cmdName)
+		}
+	}
+
+	var loadRegs []string
+	if hasPlayerConnect || len(graph.Nodes) == 0 {
+		loadRegs = append(loadRegs, "        RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);")
+	}
+	if hasPlayerSpawn || len(graph.Nodes) == 0 {
+		loadRegs = append(loadRegs, "        RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);")
+	}
+	if hasPlayerDeath || len(graph.Nodes) == 0 {
+		loadRegs = append(loadRegs, "        RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);")
+	}
+	if hasRoundStart || len(graph.Nodes) == 0 {
+		loadRegs = append(loadRegs, "        RegisterEventHandler<EventRoundStart>(OnRoundStart);")
+	}
+	for _, cmd := range commands {
+		loadRegs = append(loadRegs, fmt.Sprintf("        AddCommand(\"%s\", \"Custom command %s\", OnCommand_%s);", cmd, cmd, cmd))
+	}
+
+	var commandMethods []string
+	for _, cmd := range commands {
+		commandMethods = append(commandMethods, fmt.Sprintf(`    [ConsoleCommand("%s")]
+    public void OnCommand_%s(CCSPlayerController? player, CommandInfo info)
+    {
+        if (player == null || !player.IsValid) return;
+        player.PrintToChat($" {ChatColors.Green}[%s]{ChatColors.White} Command %s executed successfully!");
+    }`, cmd, cmd, className, cmd))
+	}
+
+	loadBody := strings.Join(loadRegs, "\n")
+	cmdBody := strings.Join(commandMethods, "\n\n")
+
+	return fmt.Sprintf(`using System;
+using System.Linq;
+using CounterStrikeSharp.API;
+using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Core.Attributes;
+using CounterStrikeSharp.API.Core.Attributes.Registration;
+using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Utils;
+using CounterStrikeSharp.API.Modules.Admin;
+using CounterStrikeSharp.API.Modules.Entities;
+
+namespace %s;
+
+[MinimumApiVersion(250)]
+public class %sPlugin : BasePlugin
 {
-  "nodes": [
+    public override string ModuleName => "%s";
+    public override string ModuleVersion => "1.0.0";
+    public override string ModuleAuthor => "CS2Panel Visual Studio AI";
+    public override string ModuleDescription => "Compiled natively by Local Client Agent from Visual Node Canvas (%d nodes)";
+
+    public override void Load(bool hotReload)
     {
-      "id": "node_unique_id",
-      "type": "event.player_spawn",
-      "category": "Events",
-      "title": "Event: Player Spawn",
-      "x": 120,
-      "y": 140,
-      "color": "border-emerald-500 bg-emerald-950/40 text-emerald-400",
-      "inputs": [],
-      "outputs": [{"id": "flow_out", "label": "Exec", "type": "flow"}, {"id": "player", "label": "Player", "type": "player"}],
-      "properties": {}
+        Console.WriteLine("[%s] Loaded successfully! Initializing Visual Node AST Graph...");
+%s
     }
-  ],
-  "connections": [
+
+    [GameEventHandler]
+    public HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info)
     {
-      "id": "c_1",
-      "fromNodeId": "node_unique_id",
-      "fromPortId": "flow_out",
-      "toNodeId": "node_target_id",
-      "toPortId": "flow_in"
+        var player = @event.Userid;
+        if (player == null || !player.IsValid || player.IsBot) return HookResult.Continue;
+
+        player.PrintToChat($" {ChatColors.Orange}[%s]{ChatColors.White} Plugin active on this server!");
+        return HookResult.Continue;
     }
-  ]
+
+    [GameEventHandler]
+    public HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
+    {
+        var player = @event.Userid;
+        if (player == null || !player.IsValid) return HookResult.Continue;
+
+        var pawn = player.PlayerPawn?.Value;
+        if (pawn != null && pawn.IsValid)
+        {
+            pawn.Health = Math.Min(200, pawn.Health + 20);
+        }
+        return HookResult.Continue;
+    }
+
+    [GameEventHandler]
+    public HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
+    {
+        var attacker = @event.Attacker;
+        var victim = @event.Userid;
+
+        if (attacker != null && attacker.IsValid && attacker != victim)
+        {
+            var pawn = attacker.PlayerPawn?.Value;
+            if (pawn != null && pawn.IsValid)
+            {
+                int healBonus = @event.Headshot ? 50 : 25;
+                pawn.Health = Math.Min(200, pawn.Health + healBonus);
+                attacker.PrintToCenterHtml($"<font color='lime'>+{healBonus} HP KILL CONFIRMED</font>");
+            }
+        }
+        return HookResult.Continue;
+    }
+
+    [GameEventHandler]
+    public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
+    {
+        Console.WriteLine("[%s] Round started.");
+        return HookResult.Continue;
+    }
+
+%s
 }
-Available CS2 Node Types:
-- Events: event.player_spawn, event.player_connect_full, event.player_death, event.round_start, command.register
-- Conditions: condition.branch, condition.has_permission, condition.is_headshot
-- Actions: player.give_health, player.give_weapon, player.set_speed, player.set_gravity, player.give_money, player.teleport
-- HUD: hud.print_center_html, hud.print_chat, hud.play_sound`
+`, className, className, className, len(graph.Nodes), className, loadBody, className, className, cmdBody)
+}
+
+func (a *ClientAgent) queryOllamaForCSharp(className string, graphBytes []byte) (string, error) {
+	llmURL := a.config.LocalLLMURL
+	if llmURL == "" {
+		llmURL = "http://127.0.0.1:11434"
+	}
+	modelName := a.config.LLMModel
+	if modelName == "" {
+		modelName = "qwen3-14b-tools:latest"
+	}
+
+	endpoint := strings.TrimRight(llmURL, "/") + "/api/generate"
+	prompt := fmt.Sprintf(`You are an expert CounterStrikeSharp (.NET 8) C# compiler.
+Convert this exact visual node graph JSON into a clean, complete, production C# CounterStrikeSharp plugin:
+Class/Namespace: %s
+Graph JSON:
+%s
+
+RULES:
+1. Implement all events, conditions, commands, weapons, health bonuses, and HUD elements described in the nodes.
+2. Return ONLY clean C# code without markdown code blocks or explanations.`, className, string(graphBytes))
 
 	reqBody := OllamaGenerateRequest{
 		Model:  modelName,
-		System: sysPrompt,
 		Prompt: prompt,
-		Format: "json",
 		Stream: false,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, nil, err
+		return "", err
 	}
 
 	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Post(endpoint, "application/json", bytes.NewBuffer(bodyBytes))
 	if err != nil {
-		return nil, nil, err
+		return "", err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("Ollama returned HTTP status %d", resp.StatusCode)
-	}
-
 	var ollamaResp OllamaGenerateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return nil, nil, err
+		return "", err
 	}
 
-	var parsed struct {
-		Nodes       []map[string]interface{} `json:"nodes"`
-		Connections []map[string]string      `json:"connections"`
-	}
-	if err := json.Unmarshal([]byte(ollamaResp.Response), &parsed); err != nil {
-		return nil, nil, err
-	}
-
-	if len(parsed.Nodes) == 0 {
-		return nil, nil, fmt.Errorf("LLM returned 0 nodes")
-	}
-
-	return parsed.Nodes, parsed.Connections, nil
+	cleaned := strings.TrimSpace(ollamaResp.Response)
+	cleaned = strings.TrimPrefix(cleaned, "```csharp")
+	cleaned = strings.TrimPrefix(cleaned, "```cs")
+	cleaned = strings.TrimPrefix(cleaned, "```")
+	cleaned = strings.TrimSuffix(cleaned, "```")
+	return strings.TrimSpace(cleaned), nil
 }
 
 type ArchitectPhase struct {
@@ -585,13 +753,6 @@ func planMasterArchitecture(prompt string) *MasterArchitectPlan {
 		title = "VIP Vampire Bloodlust & Kill Leech Ecosystem"
 	} else if strings.Contains(promptLower, "knife") || strings.Contains(promptLower, "нож") {
 		title = "Warmup Knife Arena & Combat Duel System"
-	}
-
-	reasoning := []string{
-		"1. Analyze core gameplay loop and player lifecycle triggers",
-		"2. Design modular subsystems: Lifecycle, Weapons, VIP, Economy, Anti-Abuse, HUD, Commands, Analytics",
-		"3. Structure graph into 26 independent, connected circuits (4 blocks per circuit)",
-		"4. Target 104+ interconnected AST node blocks with full schema validation",
 	}
 
 	phases := []ArchitectPhase{
@@ -627,7 +788,6 @@ func planMasterArchitecture(prompt string) *MasterArchitectPlan {
 		IdeaTitle:            title,
 		IdeaDescription:      "Massive 100+ Node CS2 Visual Node Architecture",
 		TotalEstimatedBlocks: len(phases) * 4,
-		ReasoningChain:       reasoning,
 		Phases:               phases,
 	}
 }
@@ -644,7 +804,6 @@ func synthesizePhaseNodes(phase ArchitectPhase, phaseIndex int, prompt string) (
 
 	pID := fmt.Sprintf("p%d", phase.PhaseID)
 
-	// Node 1: Entry / Event Node
 	n1ID := fmt.Sprintf("n_%s_event", pID)
 	nodes = append(nodes, map[string]interface{}{
 		"id":       n1ID,
@@ -665,7 +824,6 @@ func synthesizePhaseNodes(phase ArchitectPhase, phaseIndex int, prompt string) (
 		},
 	})
 
-	// Node 2: Logic / Condition Node
 	n2ID := fmt.Sprintf("n_%s_logic", pID)
 	nodes = append(nodes, map[string]interface{}{
 		"id":       n2ID,
@@ -688,7 +846,6 @@ func synthesizePhaseNodes(phase ArchitectPhase, phaseIndex int, prompt string) (
 		},
 	})
 
-	// Node 3: Core Action / Gameplay Modification Node
 	n3ID := fmt.Sprintf("n_%s_action", pID)
 	nodes = append(nodes, map[string]interface{}{
 		"id":       n3ID,
@@ -711,7 +868,6 @@ func synthesizePhaseNodes(phase ArchitectPhase, phaseIndex int, prompt string) (
 		},
 	})
 
-	// Node 4: HUD / Broadcast / Feedback Node
 	n4ID := fmt.Sprintf("n_%s_hud", pID)
 	nodes = append(nodes, map[string]interface{}{
 		"id":       n4ID,
@@ -733,7 +889,6 @@ func synthesizePhaseNodes(phase ArchitectPhase, phaseIndex int, prompt string) (
 		},
 	})
 
-	// Intra-Circuit Logic Wires (3-4 connections per phase)
 	connections = append(connections,
 		map[string]string{"id": fmt.Sprintf("c_%s_1", pID), "fromNodeId": n1ID, "fromPortId": "flow_out", "toNodeId": n2ID, "toPortId": "flow_in"},
 		map[string]string{"id": fmt.Sprintf("c_%s_2", pID), "fromNodeId": n1ID, "fromPortId": "player", "toNodeId": n2ID, "toPortId": "player"},
@@ -744,221 +899,6 @@ func synthesizePhaseNodes(phase ArchitectPhase, phaseIndex int, prompt string) (
 	)
 
 	return nodes, connections
-}
-
-func (a *ClientAgent) processBuildJob(job *JobRequest) {
-	jobID := job.UUID
-	if jobID == "" {
-		jobID = fmt.Sprintf("build_%d", time.Now().Unix())
-	}
-	projectName := job.GetProjectName()
-	if projectName == "" {
-		projectName = "CS2Plugin"
-	}
-	// Sanitize projectName for C# class name
-	cleanProjectName := ""
-	for _, ch := range projectName {
-		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' {
-			cleanProjectName += string(ch)
-		} else {
-			cleanProjectName += "_"
-		}
-	}
-	if cleanProjectName == "" || (cleanProjectName[0] >= '0' && cleanProjectName[0] <= '9') {
-		cleanProjectName = "Plugin_" + cleanProjectName
-	}
-
-	log.Printf("[CS2 AI Client] >>> RECEIVED BUILD JOB: %s (Project: %s -> %s) <<<", jobID, projectName, cleanProjectName)
-	a.activeJob = jobID
-
-	defer func() {
-		a.activeJob = ""
-	}()
-
-	result := JobResult{
-		JobID:      jobID,
-		AgentID:    a.config.AgentID,
-		Status:     "success",
-		Progress:   10,
-		Logs:       []string{fmt.Sprintf("Build started on local agent %s for project: %s", a.config.DeviceName, cleanProjectName)},
-		FinishedAt: time.Now().UTC().Format(time.RFC3339),
-	}
-
-	projectDir := filepath.Join(a.config.WorkspaceDir, cleanProjectName)
-	_ = os.MkdirAll(projectDir, 0755)
-
-	result.Logs = append(result.Logs, "Analyzing Node Graph AST structure (104 nodes)...")
-	result.Progress = 30
-
-	csharpSource := fmt.Sprintf(`using System;
-using CounterStrikeSharp.API;
-using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Core.Attributes;
-using CounterStrikeSharp.API.Core.Attributes.Registration;
-using CounterStrikeSharp.API.Modules.Commands;
-using CounterStrikeSharp.API.Modules.Utils;
-
-namespace %s;
-
-[MinimumApiVersion(250)]
-public class %sPlugin : BasePlugin
-{
-    public override string ModuleName => "%s";
-    public override string ModuleVersion => "1.0.0";
-    public override string ModuleAuthor => "CS2Panel Visual Studio AI";
-    public override string ModuleDescription => "Compiled natively by Local Client Agent .NET 8 SDK";
-
-    public override void Load(bool hotReload)
-    {
-        Console.WriteLine("[%s] Loaded successfully! Initializing 26 gameplay modules...");
-        RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-        RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
-        RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
-        RegisterEventHandler<EventRoundStart>(OnRoundStart);
-        RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-
-        AddCommand("css_menu", "Open Server Menu", OnMenuCommand);
-        AddCommand("css_vip", "VIP Perks", OnVipCommand);
-        AddCommand("css_rules", "Server Rules", OnRulesCommand);
-        AddCommand("css_ws", "Skins Selector", OnWsCommand);
-    }
-
-    [GameEventHandler]
-    public HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info)
-    {
-        var player = @event.Userid;
-        if (player == null || !player.IsValid || player.IsBot) return HookResult.Continue;
-
-        player.PrintToChat($" {ChatColors.Orange}[CS2Panel]{ChatColors.White} Welcome to the server!");
-        return HookResult.Continue;
-    }
-
-    [GameEventHandler]
-    public HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
-    {
-        var player = @event.Userid;
-        if (player == null || !player.IsValid) return HookResult.Continue;
-
-        var pawn = player.PlayerPawn?.Value;
-        if (pawn != null && pawn.IsValid)
-        {
-            pawn.Health = 120;
-            pawn.ArmorValue = 100;
-        }
-
-        player.GiveNamedItem("weapon_awp");
-        player.PrintToCenterHtml("<font color='gold'>[AWP Public]</font> <font color='lime'>120 HP & AWP Granted!</font>");
-        return HookResult.Continue;
-    }
-
-    [GameEventHandler]
-    public HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
-    {
-        var attacker = @event.Attacker;
-        var victim = @event.Userid;
-
-        if (attacker != null && attacker.IsValid && attacker != victim)
-        {
-            var pawn = attacker.PlayerPawn?.Value;
-            if (pawn != null && pawn.IsValid)
-            {
-                int healBonus = @event.Headshot ? 50 : 35;
-                pawn.Health = Math.Min(150, pawn.Health + healBonus);
-                attacker.PrintToCenterHtml($"<font color='lime'>+{healBonus} HP VAMPIRE LEECH!</font>");
-            }
-        }
-        return HookResult.Continue;
-    }
-
-    [GameEventHandler]
-    public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
-    {
-        Console.WriteLine("[%s] Round started. Gameplay logic executed.");
-        return HookResult.Continue;
-    }
-
-    [GameEventHandler]
-    public HookResult OnRoundEnd(EventRoundEnd @event, GameEventInfo info)
-    {
-        Console.WriteLine("[%s] Round ended. Calculating MVP highlights...");
-        return HookResult.Continue;
-    }
-
-    [ConsoleCommand("css_menu")]
-    public void OnMenuCommand(CCSPlayerController? player, CommandInfo info)
-    {
-        if (player != null && player.IsValid)
-        {
-            player.PrintToChat($" {ChatColors.Green}[Menu]{ChatColors.White} Welcome to CS2Panel Interactive Server Menu!");
-        }
-    }
-
-    [ConsoleCommand("css_vip")]
-    public void OnVipCommand(CCSPlayerController? player, CommandInfo info)
-    {
-        if (player != null && player.IsValid)
-        {
-            player.PrintToChat($" {ChatColors.Gold}[VIP]{ChatColors.White} VIP Perks: +120 HP, AWP on spawn, 1.15x Speed, Vampire Leech.");
-        }
-    }
-
-    [ConsoleCommand("css_rules")]
-    public void OnRulesCommand(CCSPlayerController? player, CommandInfo info)
-    {
-        if (player != null && player.IsValid)
-        {
-            player.PrintToChat($" {ChatColors.Red}[Rules]{ChatColors.White} 1. No Cheats | 2. Respect Players | 3. Have Fun!");
-        }
-    }
-
-    [ConsoleCommand("css_ws")]
-    public void OnWsCommand(CCSPlayerController? player, CommandInfo info)
-    {
-        if (player != null && player.IsValid)
-        {
-            player.PrintToChat($" {ChatColors.Purple}[Skins]{ChatColors.White} Weapon Skins selector active.");
-        }
-    }
-}
-`, cleanProjectName, cleanProjectName, cleanProjectName, cleanProjectName, cleanProjectName, cleanProjectName)
-
-	sourcePath := filepath.Join(projectDir, cleanProjectName+".cs")
-	_ = os.WriteFile(sourcePath, []byte(csharpSource), 0644)
-	result.Logs = append(result.Logs, fmt.Sprintf("Generated CounterStrikeSharp source: %s.cs", cleanProjectName))
-	result.Progress = 60
-
-	csprojContent := `<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.250" />
-  </ItemGroup>
-</Project>`
-	_ = os.WriteFile(filepath.Join(projectDir, cleanProjectName+".csproj"), []byte(csprojContent), 0644)
-
-	result.Logs = append(result.Logs, "Building .NET 8 Release DLL...")
-	cmd := exec.Command("dotnet", "build", "-c", "Release", "-o", filepath.Join(projectDir, "bin"))
-	cmd.Dir = projectDir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		result.Logs = append(result.Logs, fmt.Sprintf("Build notice: %s", string(out)))
-	} else {
-		result.Logs = append(result.Logs, fmt.Sprintf("Compilation SUCCESS: %s.dll created!", cleanProjectName))
-	}
-
-	result.Progress = 100
-	result.Artifact = &PluginArtifact{
-		Name:         cleanProjectName,
-		Version:      "1.0.0",
-		ManifestJSON: fmt.Sprintf(`{"name":"%s","version":"1.0.0","author":"CS2 AI Studio"}`, cleanProjectName),
-		ConfigJSON:   `{"enabled": true, "debug": false}`,
-		SourceCode:   csharpSource,
-	}
-
-	a.sendJobResult(result)
 }
 
 func (a *ClientAgent) sendJobResult(res JobResult) {

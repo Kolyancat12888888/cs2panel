@@ -9,16 +9,19 @@ use App\Models\JobTask;
 use App\Models\PluginProject;
 use App\Models\Server;
 use App\Services\DaemonClientService;
+use App\Services\GraphCompilerService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
 class PluginStudioController extends Controller
 {
     protected DaemonClientService $daemon;
+    protected GraphCompilerService $compiler;
 
-    public function __construct(DaemonClientService $daemon)
+    public function __construct(DaemonClientService $daemon, GraphCompilerService $compiler)
     {
         $this->daemon = $daemon;
+        $this->compiler = $compiler;
     }
 
     public function index(Request $request)
@@ -348,93 +351,8 @@ class PluginStudioController extends Controller
 
     protected function generateCSharpCode(string $className, PluginProject $project): string
     {
-        $author = addslashes($project->author ?? 'CS2Panel Studio');
-        $desc = addslashes($project->description ?? 'Custom CS2 Plugin');
-        $version = $project->version ?? '1.0.0';
-
-        return <<<CSHARP
-using System;
-using CounterStrikeSharp.API;
-using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Core.Attributes;
-using CounterStrikeSharp.API.Core.Attributes.Registration;
-using CounterStrikeSharp.API.Modules.Commands;
-using CounterStrikeSharp.API.Modules.Utils;
-
-namespace {$className};
-
-[MinimumApiVersion(250)]
-public class {$className}Plugin : BasePlugin
-{
-    public override string ModuleName => "{$project->name}";
-    public override string ModuleVersion => "{$version}";
-    public override string ModuleAuthor => "{$author}";
-    public override string ModuleDescription => "{$desc}";
-
-    public override void Load(bool hotReload)
-    {
-        Console.WriteLine("[{$className}] Plugin loaded successfully into CounterStrikeSharp!");
-        RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-        RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
-        RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
-        RegisterEventHandler<EventRoundStart>(OnRoundStart);
-
-        AddCommand("css_info", "Show Plugin Info", OnInfoCommand);
-    }
-
-    [GameEventHandler]
-    public HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info)
-    {
-        var player = @event.Userid;
-        if (player == null || !player.IsValid || player.IsBot) return HookResult.Continue;
-
-        player.PrintToChat($" {ChatColors.Orange}[{$className}]{ChatColors.White} Plugin active on this server!");
-        return HookResult.Continue;
-    }
-
-    [GameEventHandler]
-    public HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
-    {
-        var player = @event.Userid;
-        if (player == null || !player.IsValid) return HookResult.Continue;
-
-        return HookResult.Continue;
-    }
-
-    [GameEventHandler]
-    public HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
-    {
-        var attacker = @event.Attacker;
-        var victim = @event.Userid;
-
-        if (attacker != null && attacker.IsValid && attacker != victim)
-        {
-            var pawn = attacker.PlayerPawn?.Value;
-            if (pawn != null && pawn.IsValid)
-            {
-                attacker.PrintToCenterHtml("<font color='lime'>+ KILL CONFIRMED</font>");
-            }
-        }
-        return HookResult.Continue;
-    }
-
-    [GameEventHandler]
-    public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
-    {
-        Console.WriteLine("[{$className}] Round started.");
-        return HookResult.Continue;
-    }
-
-    [ConsoleCommand("css_info")]
-    public void OnInfoCommand(CCSPlayerController? player, CommandInfo info)
-    {
-        if (player != null && player.IsValid)
-        {
-            player.PrintToChat($" {ChatColors.Green}[{$className}]{ChatColors.White} {$project->name} v{$version} by {$author}");
-        }
+        return $this->compiler->compile($project);
     }
 }
-CSHARP;
-    }
-}
+
 
