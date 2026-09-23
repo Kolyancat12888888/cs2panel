@@ -96,10 +96,7 @@ class User extends Authenticatable
             return ['*'];
         }
 
-        // Cache user permissions per session
-        $cacheKey = 'user_perms_' . $this->id;
-        
-        return Cache::remember($cacheKey, 60, function () {
+        $computePerms = function () {
             $perms = [];
 
             // 1. Collect permissions from assigned roles
@@ -130,7 +127,15 @@ class User extends Authenticatable
             }
 
             return array_keys($perms);
-        });
+        };
+
+        // Attempt caching with fallback if cache driver fails
+        try {
+            $cacheKey = 'user_perms_' . $this->id;
+            return Cache::remember($cacheKey, 60, $computePerms);
+        } catch (\Throwable $e) {
+            return $computePerms();
+        }
     }
 
     public function hasPermission(string $permissionSlug): bool
@@ -144,7 +149,11 @@ class User extends Authenticatable
 
     public function flushPermissionsCache(): void
     {
-        Cache::forget('user_perms_' . $this->id);
+        try {
+            Cache::forget('user_perms_' . $this->id);
+        } catch (\Throwable $e) {
+            // Ignore cache forget errors
+        }
     }
 
     public function assignRole(string|Role $role): self
