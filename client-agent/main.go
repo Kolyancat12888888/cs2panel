@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -1050,7 +1051,7 @@ MANDATORY EXPANSION GUIDELINES (Target 500-1000+ lines of robust, complete logic
 	reqBody := OllamaGenerateRequest{
 		Model:  modelName,
 		Prompt: prompt,
-		Stream: false,
+		Stream: true,
 		Options: map[string]interface{}{
 			"temperature":    0.55,
 			"top_p":          0.9,
@@ -1065,19 +1066,45 @@ MANDATORY EXPANSION GUIDELINES (Target 500-1000+ lines of robust, complete logic
 		return "", err
 	}
 
-	client := &http.Client{Timeout: 180 * time.Second}
+	client := &http.Client{Timeout: 10009 * time.Second}
 	resp, err := client.Post(endpoint, "application/json", bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	var ollamaResp OllamaGenerateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return "", err
+	log.Printf("[CS2 AI Client] [Ollama Stream] Connected to %s (%s). Streaming thoughts & code...", endpoint, modelName)
+	fmt.Println("--------------------------------- [AI GENERATION STREAM START] ---------------------------------")
+
+	var fullBuilder strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	// Buffer up to 10MB per token line if needed
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var chunk OllamaGenerateResponse
+		if err := json.Unmarshal(line, &chunk); err == nil {
+			if chunk.Response != "" {
+				fmt.Print(chunk.Response)
+				fullBuilder.WriteString(chunk.Response)
+			}
+			if chunk.Done {
+				break
+			}
+		}
+	}
+	fmt.Println("\n---------------------------------- [AI GENERATION STREAM END] ----------------------------------")
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("[CS2 AI Client] [Ollama Stream] Warning: Stream reading error: %v", err)
 	}
 
-	cleaned := strings.TrimSpace(ollamaResp.Response)
+	cleaned := strings.TrimSpace(fullBuilder.String())
 
 	// Remove Qwen / DeepSeek think tags
 	if idx := strings.LastIndex(cleaned, "</think>"); idx != -1 {
