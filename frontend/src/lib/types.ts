@@ -51,14 +51,39 @@ export interface Node {
   telemetry?: NodeTelemetry;
 }
 
+export interface Permission {
+  id: number;
+  slug: string;
+  name: string;
+  module: string;
+  description?: string;
+}
+
+export interface Role {
+  id: number;
+  name: string;
+  slug: string;
+  description?: string;
+  is_system: boolean;
+  permissions?: Permission[];
+  users_count?: number;
+}
+
 export interface User {
   id: number;
   name: string;
   email: string;
   steam_id?: string;
   avatar?: string;
-  role: 'admin' | 'user';
+  role: string;
+  is_admin?: boolean;
+  is_superadmin?: boolean;
   server_limit: number;
+  servers_count?: number;
+  is_banned?: boolean;
+  roles?: Role[];
+  permissions?: string[];
+  created_at?: string;
 }
 
 export interface Plugin {
@@ -100,12 +125,31 @@ export interface Ban {
 export interface AdminPrivilege {
   id: number;
   server_id: number;
-  steam_id: string;
   player_name: string;
-  group_name: string;
-  flags: string;
+  steam_id: string;
   immunity: number;
-  expires_at?: string;
+  flags: string;
+  comment?: string;
+}
+
+export interface Backup {
+  id: number;
+  server_id: number;
+  filename: string;
+  size_bytes: number;
+  is_successful: boolean;
+  created_at: string;
+}
+
+export interface Schedule {
+  id: number;
+  server_id: number;
+  name: string;
+  cron_expression: string;
+  action_type: 'restart' | 'command' | 'backup' | 'map_change';
+  payload?: string;
+  is_active: boolean;
+  last_run_at?: string;
 }
 
 export interface CvarPreset {
@@ -113,6 +157,16 @@ export interface CvarPreset {
   name: string;
   game_mode: string;
   description: string;
-  cvars_json: Record<string, string>;
-  is_default: boolean;
+  cvars?: Record<string, any>;
+  cvars_json: Record<string, any>;
+}
+
+export interface ActivityLog {
+  id: number;
+  user_id?: number;
+  user?: User;
+  action: string;
+  description: string;
+  ip_address?: string;
+  created_at: string;
 }

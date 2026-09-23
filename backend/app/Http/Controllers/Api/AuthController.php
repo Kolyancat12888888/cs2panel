@@ -30,7 +30,7 @@ class AuthController extends Controller
 
         return response()->json([
             'token' => $token,
-            'user' => $user,
+            'user' => $this->formatUserPayload($user),
         ]);
     }
 
@@ -42,25 +42,35 @@ class AuthController extends Controller
             'password' => 'required|string|min:6',
         ]);
 
+        $isFirstUser = User::count() === 0;
+
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
-            'role' => User::count() === 0 ? 'admin' : 'user', // first user is admin
-            'server_limit' => 3,
+            'role' => $isFirstUser ? 'superadmin' : 'user',
+            'server_limit' => $isFirstUser ? 100 : 2,
         ]);
+
+        // Attach system role
+        $roleSlug = $isFirstUser ? 'superadmin' : 'user';
+        $role = \App\Models\Role::where('slug', $roleSlug)->first();
+        if ($role) {
+            $user->roles()->syncWithoutDetaching([$role->id]);
+        }
 
         $token = $user->createToken('auth-token')->plainTextToken;
 
         return response()->json([
             'token' => $token,
-            'user' => $user,
+            'user' => $this->formatUserPayload($user),
         ], 201);
     }
 
     public function me(Request $request)
     {
-        return response()->json($request->user());
+        $user = $request->user();
+        return response()->json($this->formatUserPayload($user));
     }
 
     public function logout(Request $request)
@@ -73,6 +83,7 @@ class AuthController extends Controller
     {
         $request->validate(['steam_id' => 'required|string']);
         
+        $isNew = !User::where('steam_id', $request->steam_id)->exists();
         $user = User::firstOrCreate(
             ['steam_id' => $request->steam_id],
             [
@@ -84,12 +95,36 @@ class AuthController extends Controller
             ]
         );
 
+        if ($isNew) {
+            $defaultRole = \App\Models\Role::where('slug', 'user')->first();
+            if ($defaultRole) {
+                $user->roles()->syncWithoutDetaching([$defaultRole->id]);
+            }
+        }
+
         $token = $user->createToken('steam-token')->plainTextToken;
 
         return response()->json([
             'token' => $token,
-            'user' => $user,
+            'user' => $this->formatUserPayload($user),
         ]);
+    }
+
+    private function formatUserPayload(User $user): array
+    {
+        $user->loadMissing('roles');
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'avatar' => $user->avatar,
+            'role' => $user->role,
+            'is_admin' => $user->isAdmin(),
+            'is_superadmin' => $user->isSuperAdmin(),
+            'server_limit' => $user->server_limit,
+            'roles' => $user->roles->map(fn($r) => ['id' => $r->id, 'name' => $r->name, 'slug' => $r->slug]),
+            'permissions' => $user->getAllPermissions(),
+        ];
     }
 
     public function systemStatus()

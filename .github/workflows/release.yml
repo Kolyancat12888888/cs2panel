@@ -91,15 +91,15 @@ jobs:
           # 1. CS2 Deployer
           cd cs2deployer
           go mod tidy || true
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.DefaultVersion=${{ steps.version.outputs.tag }}" -o ../bin/cs2deployer-linux-amd64 main.go
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.DefaultVersion=${{ steps.version.outputs.tag }}" -o ../bin/cs2deployer-windows-amd64.exe main.go
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.DefaultVersion=${{ steps.version.outputs.tag }}" -o ../bin/cs2deployer-linux-amd64 .
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.DefaultVersion=${{ steps.version.outputs.tag }}" -o ../bin/cs2deployer-windows-amd64.exe .
           cd ..
 
           # 2. CS2 Node Daemon
           if [ -d daemon ]; then
             cd daemon
             go mod tidy || true
-            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o ../bin/cs2daemon-linux-amd64 main.go
+            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o ../bin/cs2daemon-linux-amd64 .
             cd ..
           fi
 
@@ -107,8 +107,8 @@ jobs:
           if [ -d client-agent ]; then
             cd client-agent
             go mod tidy || true
-            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o ../bin/cs2agent-linux-amd64 main.go
-            GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o ../bin/cs2agent-windows-amd64.exe main.go
+            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o ../bin/cs2agent-linux-amd64 .
+            GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o ../bin/cs2agent-windows-amd64.exe .
             cd ..
           fi
 

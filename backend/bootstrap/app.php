@@ -17,6 +17,10 @@ return Application::configure(basePath: dirname(__DIR__))
             'v1/*',
             'auth/*',
         ]);
+
+        $middleware->alias([
+            'permission' => \App\Http\Middleware\CheckPermission::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

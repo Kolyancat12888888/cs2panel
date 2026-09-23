@@ -4,13 +4,23 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { usePathname, useRouter } from 'next/navigation';
 import { fetchApi } from './api';
 
+export interface AuthRole {
+  id: number;
+  name: string;
+  slug: string;
+}
+
 export interface AuthUser {
   id: number;
   name: string;
   email: string;
   avatar?: string;
-  role: 'admin' | 'user';
+  role: string;
+  is_admin?: boolean;
+  is_superadmin?: boolean;
   server_limit: number;
+  roles?: AuthRole[];
+  permissions?: string[];
 }
 
 interface AuthContextType {
@@ -18,6 +28,10 @@ interface AuthContextType {
   token: string | null;
   loading: boolean;
   isAuthenticated: boolean;
+  isAdmin: boolean;
+  isSuperAdmin: boolean;
+  hasPermission: (permissionSlug: string) => boolean;
+  hasRole: (roleSlug: string | string[]) => boolean;
   login: (token: string, user: AuthUser) => void;
   logout: () => void;
   refreshUser: () => Promise<void>;
@@ -28,6 +42,10 @@ const AuthContext = createContext<AuthContextType>({
   token: null,
   loading: true,
   isAuthenticated: false,
+  isAdmin: false,
+  isSuperAdmin: false,
+  hasPermission: () => false,
+  hasRole: () => false,
   login: () => {},
   logout: () => {},
   refreshUser: async () => {},
@@ -78,14 +96,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logout();
       }
     } catch {
-      // 401 or token expired/invalid
       logout();
     } finally {
       setLoading(false);
     }
   }, [logout]);
 
-  // Initial token load & route check
+  // Initial load
   useEffect(() => {
     const savedToken = localStorage.getItem('auth_token');
     const savedUser = localStorage.getItem('user');
@@ -100,7 +117,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     refreshUser();
   }, [refreshUser]);
 
-  // Periodic token validation loop (every 5 seconds)
+  // Periodic session validation (every 10 seconds)
   useEffect(() => {
     const interval = setInterval(() => {
       const currentToken = localStorage.getItem('auth_token');
@@ -123,7 +140,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           router.push('/login');
         }
       }
-    }, 5000);
+    }, 10000);
 
     return () => clearInterval(interval);
   }, [pathname, logout, router]);
@@ -137,6 +154,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [pathname, token, loading, router]);
 
+  const hasPermission = useCallback((perm: string): boolean => {
+    if (!user) return false;
+    if (user.is_superadmin || user.role === 'superadmin') return true;
+    const perms = user.permissions || [];
+    if (perms.includes('*')) return true;
+    return perms.includes(perm);
+  }, [user]);
+
+  const hasRole = useCallback((roles: string | string[]): boolean => {
+    if (!user) return false;
+    if (user.is_superadmin || user.role === 'superadmin') return true;
+    const checkList = Array.isArray(roles) ? roles : [roles];
+    const userRoleSlugs = (user.roles || []).map((r) => r.slug.toLowerCase());
+    if (user.role) userRoleSlugs.push(user.role.toLowerCase());
+
+    return checkList.some((r) => userRoleSlugs.includes(r.toLowerCase()));
+  }, [user]);
+
+  const isAdmin = !!user && (user.is_admin || user.role === 'admin' || user.role === 'superadmin' || hasPermission('settings.view'));
+  const isSuperAdmin = !!user && (user.is_superadmin || user.role === 'superadmin');
+
   return (
     <AuthContext.Provider
       value={{
@@ -144,6 +182,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         token,
         loading,
         isAuthenticated: !!user && !!token,
+        isAdmin,
+        isSuperAdmin,
+        hasPermission,
+        hasRole,
         login,
         logout,
         refreshUser,
