@@ -161,4 +161,20 @@ class DaemonClientService
             return ['error' => $e->getMessage()];
         }
     }
+
+    public function installCSS(Server $server): array
+    {
+        $node = $server->node;
+        $url = $this->getBaseUri($node) . "/servers/{$server->uuid}/install-css";
+
+        try {
+            $resp = $this->client->post($url, [
+                'headers' => ['X-Node-Token' => $node->daemon_secret],
+            ]);
+            return json_decode($resp->getBody()->getContents(), true) ?? [];
+        } catch (\Exception $e) {
+            return ['error' => $e->getMessage()];
+        }
+    }
 }
+

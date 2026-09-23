@@ -110,9 +110,11 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     Route::post('/servers/{id}/files/delete', [FileManagerController::class, 'delete']);
     Route::post('/servers/{id}/files/mkdir', [FileManagerController::class, 'mkdir']);
 
-    // Plugins Marketplace
+    // Plugins Marketplace & Mod Engine
     Route::get('/plugins', [PluginController::class, 'index']);
     Route::post('/plugins', [PluginController::class, 'store']);
+    Route::post('/servers/{id}/plugins/install-engine', [PluginController::class, 'installEngine']);
+    Route::post('/servers/{id}/plugins/reload', [PluginController::class, 'reloadPlugins']);
     Route::post('/servers/{id}/plugins/{pluginId}/install', [PluginController::class, 'install']);
 
     // Steam Workshop Maps
