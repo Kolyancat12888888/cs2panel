@@ -110,6 +110,7 @@ func (s *APIServer) setupRoutes() {
 
 		// Mods & Plugins
 		v1.POST("/servers/:uuid/mods/install-css", auth, s.handleInstallCSS)
+		v1.POST("/servers/:uuid/install-css", auth, s.handleInstallCSS)
 		v1.POST("/servers/:uuid/repair-symlinks", auth, s.handleRepairSymlinks)
 
 		// Files & Configs
