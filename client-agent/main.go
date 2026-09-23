@@ -733,10 +733,12 @@ func renderEventHandlerMethod(eventName, methodSuffix, downstream string) string
 		contextSetup = `        var victim = @event.Userid;
         var attacker = @event.Attacker;
         var player = attacker ?? victim;
-        if (player == null || !player.IsValid) return HookResult.Continue;`
+        if (player == null || !player.IsValid) return HookResult.Continue;
+        var pawn = player.PlayerPawn?.Value;`
 	} else if eventName == "EventPlayerSpawn" || eventName == "EventPlayerConnectFull" {
 		contextSetup = `        var player = @event.Userid;
-        if (player == null || !player.IsValid || player.IsBot) return HookResult.Continue;`
+        if (player == null || !player.IsValid || player.IsBot) return HookResult.Continue;
+        var pawn = player.PlayerPawn?.Value;`
 	}
 
 	if strings.TrimSpace(downstream) == "" {
@@ -807,7 +809,6 @@ func compileDownstreamFlow(startNodeID string, outgoingConns map[string][]Connec
 					armor = int(v)
 				}
 			}
-			lines = append(lines, indent+"var pawn = player.PlayerPawn?.Value;")
 			lines = append(lines, indent+"if (pawn != null && pawn.IsValid)")
 			lines = append(lines, indent+"{")
 			lines = append(lines, fmt.Sprintf("%s    pawn.Health = Math.Min(200, pawn.Health + %d);", indent, hp))
@@ -881,8 +882,7 @@ func compileDownstreamFlow(startNodeID string, outgoingConns map[string][]Connec
 					speed = s
 				}
 			}
-			lines = append(lines, indent+"var pPawn = player.PlayerPawn?.Value;")
-			lines = append(lines, fmt.Sprintf("%sif (pPawn != null && pPawn.IsValid) pPawn.VelocityModifier = %.2ff;", indent, speed))
+			lines = append(lines, fmt.Sprintf("%sif (pawn != null && pawn.IsValid) pawn.VelocityModifier = %.2ff;", indent, speed))
 			next := compileDownstreamFlow(targetID, outgoingConns, nodeMap, depth)
 			if next != "" {
 				lines = append(lines, next)

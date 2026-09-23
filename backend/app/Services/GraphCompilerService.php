@@ -193,11 +193,13 @@ CSHARP;
         var attacker = @event.Attacker;
         var player = attacker ?? victim;
         if (player == null || !player.IsValid) return HookResult.Continue;
+        var pawn = player.PlayerPawn?.Value;
 CSHARP;
         } elseif ($eventName === 'EventPlayerSpawn' || $eventName === 'EventPlayerConnectFull') {
             $contextSetup = <<<CSHARP
         var player = @event.Userid;
         if (player == null || !player.IsValid || player.IsBot) return HookResult.Continue;
+        var pawn = player.PlayerPawn?.Value;
 CSHARP;
         }
 
@@ -254,7 +256,6 @@ CSHARP;
             elseif (str_contains($nodeType, 'give_health') || str_contains($nodeType, 'player.give_health')) {
                 $hp = intval($props['healthAmount'] ?? ($props['amount'] ?? 50));
                 $armor = intval($props['armorAmount'] ?? 25);
-                $lines[] = "{$indent}var pawn = player.PlayerPawn?.Value;";
                 $lines[] = "{$indent}if (pawn != null && pawn.IsValid)";
                 $lines[] = "{$indent}{";
                 $lines[] = "{$indent}    pawn.Health = Math.Min(200, pawn.Health + {$hp});";
@@ -293,8 +294,7 @@ CSHARP;
             }
             elseif (str_contains($nodeType, 'set_speed')) {
                 $speed = floatval($props['speed'] ?? 1.2);
-                $lines[] = "{$indent}var pPawn = player.PlayerPawn?.Value;";
-                $lines[] = "{$indent}if (pPawn != null && pPawn.IsValid) pPawn.VelocityModifier = {$speed}f;";
+                $lines[] = "{$indent}if (pawn != null && pawn.IsValid) pawn.VelocityModifier = {$speed}f;";
                 $next = $this->compileDownstreamFlow($targetNodeId, $outgoingConns, $nodeMap, $depth);
                 if ($next) $lines[] = $next;
             }
