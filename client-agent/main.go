@@ -537,95 +537,136 @@ func isValidCounterStrikeSharp(code string) bool {
 	return true
 }
 
+type NodeItem struct {
+	ID         string                 `json:"id"`
+	Type       string                 `json:"type"`
+	Title      string                 `json:"title"`
+	Category   string                 `json:"category"`
+	Properties map[string]interface{} `json:"properties"`
+	Config     map[string]interface{} `json:"config"`
+}
+
+type ConnectionItem struct {
+	FromNodeID string `json:"fromNodeId"`
+	FromPortID string `json:"fromPortId"`
+	ToNodeID   string `json:"toNodeId"`
+	ToPortID   string `json:"toPortId"`
+	From       string `json:"from"`
+	To         string `json:"to"`
+	FromPort   string `json:"fromPort"`
+	ToPort     string `json:"toPort"`
+}
+
 func (a *ClientAgent) generateDeterministicCSharp(className string, graphBytes []byte) string {
 	var graph struct {
-		Nodes []struct {
-			ID         string                 `json:"id"`
-			Type       string                 `json:"type"`
-			Title      string                 `json:"title"`
-			Category   string                 `json:"category"`
-			Properties map[string]interface{} `json:"properties"`
-			Config     map[string]interface{} `json:"config"`
-		} `json:"nodes"`
-		Connections []struct {
-			FromNodeID string `json:"fromNodeId"`
-			FromPortID string `json:"fromPortId"`
-			ToNodeID   string `json:"toNodeId"`
-			ToPortID   string `json:"toPortId"`
-			From       string `json:"from"`
-			To         string `json:"to"`
-		} `json:"connections"`
+		Nodes       []NodeItem       `json:"nodes"`
+		Connections []ConnectionItem `json:"connections"`
 	}
 
 	if len(graphBytes) > 0 {
 		_ = json.Unmarshal(graphBytes, &graph)
 	}
 
-	// Map nodes
-	nodeMap := make(map[string]map[string]interface{})
-	hasPlayerDeath := false
-	hasPlayerSpawn := false
-	hasPlayerConnect := false
-	hasRoundStart := false
-	var commands []string
+	nodeMap := make(map[string]NodeItem)
+	for _, n := range graph.Nodes {
+		if n.ID != "" {
+			nodeMap[n.ID] = n
+		}
+	}
 
+	outgoingConns := make(map[string][]ConnectionItem)
+	for _, c := range graph.Connections {
+		from := c.FromNodeID
+		if from == "" {
+			from = c.From
+		}
+		to := c.ToNodeID
+		if to == "" {
+			to = c.To
+		}
+		fromPort := c.FromPortID
+		if fromPort == "" {
+			fromPort = c.FromPort
+		}
+		if fromPort == "" {
+			fromPort = "flow_out"
+		}
+
+		if from != "" && to != "" {
+			c.FromNodeID = from
+			c.ToNodeID = to
+			c.FromPortID = fromPort
+			outgoingConns[from] = append(outgoingConns[from], c)
+		}
+	}
+
+	var eventNodes []NodeItem
+	var commandNodes []NodeItem
 	for _, n := range graph.Nodes {
 		t := strings.ToLower(n.Type)
-		nodeMap[n.ID] = map[string]interface{}{
-			"type":       n.Type,
-			"title":      n.Title,
-			"properties": n.Properties,
-			"config":     n.Config,
+		if strings.HasPrefix(t, "event.") || strings.Contains(t, "event_") {
+			eventNodes = append(eventNodes, n)
+		} else if strings.HasPrefix(t, "command.") || strings.Contains(t, "player_command") || strings.Contains(t, "command") {
+			commandNodes = append(commandNodes, n)
 		}
+	}
 
-		if strings.Contains(t, "player_death") {
-			hasPlayerDeath = true
-		} else if strings.Contains(t, "player_spawn") {
-			hasPlayerSpawn = true
-		} else if strings.Contains(t, "player_connect") {
-			hasPlayerConnect = true
-		} else if strings.Contains(t, "round_start") {
-			hasRoundStart = true
-		} else if strings.Contains(t, "command") {
-			cmdName := "menu"
-			if p, ok := n.Properties["command"].(string); ok && p != "" {
-				cmdName = strings.Trim(p, " !/")
-			} else if c, ok := n.Config["command"].(string); ok && c != "" {
+	var loadRegistrations []string
+	var handlersCode []string
+	registeredEvents := make(map[string]bool)
+
+	for _, evNode := range eventNodes {
+		t := strings.ToLower(evNode.Type)
+		eventName, methodSuffix := getEventHandlerMeta(t)
+		if !registeredEvents[eventName] {
+			registeredEvents[eventName] = true
+			loadRegistrations = append(loadRegistrations, fmt.Sprintf("        RegisterEventHandler<%s>(On%s);", eventName, methodSuffix))
+
+			downstream := compileDownstreamFlow(evNode.ID, outgoingConns, nodeMap, 0)
+			handlersCode = append(handlersCode, renderEventHandlerMethod(eventName, methodSuffix, downstream))
+		}
+	}
+
+	for _, cmdNode := range commandNodes {
+		props := cmdNode.Properties
+		if props == nil {
+			props = cmdNode.Config
+		}
+		cmdName := "menu"
+		if props != nil {
+			if c, ok := props["command"].(string); ok && c != "" {
 				cmdName = strings.Trim(c, " !/")
+			} else if n, ok := props["name"].(string); ok && n != "" {
+				cmdName = strings.Trim(n, " !/")
 			}
-			commands = append(commands, cmdName)
 		}
-	}
+		cleanMethod := "OnCommand_" + strings.ReplaceAll(cmdName, "-", "_")
 
-	var loadRegs []string
-	if hasPlayerConnect || len(graph.Nodes) == 0 {
-		loadRegs = append(loadRegs, "        RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);")
-	}
-	if hasPlayerSpawn || len(graph.Nodes) == 0 {
-		loadRegs = append(loadRegs, "        RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);")
-	}
-	if hasPlayerDeath || len(graph.Nodes) == 0 {
-		loadRegs = append(loadRegs, "        RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);")
-	}
-	if hasRoundStart || len(graph.Nodes) == 0 {
-		loadRegs = append(loadRegs, "        RegisterEventHandler<EventRoundStart>(OnRoundStart);")
-	}
-	for _, cmd := range commands {
-		loadRegs = append(loadRegs, fmt.Sprintf("        AddCommand(\"%s\", \"Custom command %s\", OnCommand_%s);", cmd, cmd, cmd))
-	}
+		loadRegistrations = append(loadRegistrations, fmt.Sprintf("        AddCommand(\"%s\", \"Custom command %s\", %s);", cmdName, cmdName, cleanMethod))
+		downstream := compileDownstreamFlow(cmdNode.ID, outgoingConns, nodeMap, 0)
 
-	var commandMethods []string
-	for _, cmd := range commands {
-		commandMethods = append(commandMethods, fmt.Sprintf(`    [ConsoleCommand("%s")]
-    public void OnCommand_%s(CCSPlayerController? player, CommandInfo info)
+		handlersCode = append(handlersCode, fmt.Sprintf(`    [ConsoleCommand("%s")]
+    public void %s(CCSPlayerController? player, CommandInfo info)
     {
         if (player == null || !player.IsValid) return;
-        player.PrintToChat($" {ChatColors.Green}[%s]{ChatColors.White} Command %s executed successfully!");
-    }`, cmd, cmd, className, cmd))
+
+%s
+    }`, cmdName, cleanMethod, downstream))
 	}
 
-	loadBody := strings.Join(loadRegs, "\n")
-	cmdBody := strings.Join(commandMethods, "\n\n")
+	// Default events if none registered
+	if len(registeredEvents) == 0 {
+		loadRegistrations = append(loadRegistrations,
+			"        RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);",
+			"        RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);",
+			"        RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);",
+			"        RegisterEventHandler<EventRoundStart>(OnRoundStart);",
+		)
+		handlersCode = append(handlersCode, renderDefaultEventHandlers(className)...)
+	}
+
+	loadBody := strings.Join(loadRegistrations, "\n")
+	handlersBody := strings.Join(handlersCode, "\n\n")
 
 	return fmt.Sprintf(`using System;
 using System.Linq;
@@ -645,16 +686,253 @@ public class %sPlugin : BasePlugin
 {
     public override string ModuleName => "%s";
     public override string ModuleVersion => "1.0.0";
-    public override string ModuleAuthor => "CS2Panel Visual Studio AI";
+    public override string ModuleAuthor => "CS2Panel Visual Studio";
     public override string ModuleDescription => "Compiled natively by Local Client Agent from Visual Node Canvas (%d nodes)";
 
     public override void Load(bool hotReload)
     {
-        Console.WriteLine("[%s] Loaded successfully! Initializing Visual Node AST Graph...");
+        Console.WriteLine("[%s] Initialized CounterStrikeSharp Visual Node Graph (%d nodes)...");
+
 %s
     }
 
-    [GameEventHandler]
+%s
+}
+`, className, className, className, len(graph.Nodes), className, len(graph.Nodes), loadBody, handlersBody)
+}
+
+func getEventHandlerMeta(t string) (string, string) {
+	if strings.Contains(t, "player_death") {
+		return "EventPlayerDeath", "PlayerDeath"
+	}
+	if strings.Contains(t, "player_spawn") {
+		return "EventPlayerSpawn", "PlayerSpawn"
+	}
+	if strings.Contains(t, "player_connect") {
+		return "EventPlayerConnectFull", "PlayerConnectFull"
+	}
+	if strings.Contains(t, "round_start") {
+		return "EventRoundStart", "RoundStart"
+	}
+	if strings.Contains(t, "round_end") {
+		return "EventRoundEnd", "RoundEnd"
+	}
+	if strings.Contains(t, "bomb_planted") {
+		return "EventBombPlanted", "BombPlanted"
+	}
+	return "EventPlayerSpawn", "PlayerSpawn"
+}
+
+func renderEventHandlerMethod(eventName, methodSuffix, downstream string) string {
+	contextSetup := ""
+	if eventName == "EventPlayerDeath" {
+		contextSetup = `        var victim = @event.Userid;
+        var attacker = @event.Attacker;
+        var player = attacker ?? victim;
+        if (player == null || !player.IsValid) return HookResult.Continue;`
+	} else if eventName == "EventPlayerSpawn" || eventName == "EventPlayerConnectFull" {
+		contextSetup = `        var player = @event.Userid;
+        if (player == null || !player.IsValid || player.IsBot) return HookResult.Continue;`
+	}
+
+	if strings.TrimSpace(downstream) == "" {
+		downstream = fmt.Sprintf("        Console.WriteLine(\"[Event] %s executed.\");", eventName)
+	}
+
+	return fmt.Sprintf(`    [GameEventHandler]
+    public HookResult On%s(%s @event, GameEventInfo info)
+    {
+%s
+
+%s
+
+        return HookResult.Continue;
+    }`, methodSuffix, eventName, contextSetup, downstream)
+}
+
+func compileDownstreamFlow(startNodeID string, outgoingConns map[string][]ConnectionItem, nodeMap map[string]NodeItem, depth int) string {
+	if depth > 10 {
+		return ""
+	}
+	var lines []string
+	indent := strings.Repeat("    ", 2+depth)
+
+	conns := outgoingConns[startNodeID]
+	for _, conn := range conns {
+		targetID := conn.ToNodeID
+		targetNode, exists := nodeMap[targetID]
+		if !exists {
+			continue
+		}
+
+		t := strings.ToLower(targetNode.Type)
+		props := targetNode.Properties
+		if props == nil {
+			props = targetNode.Config
+		}
+
+		if strings.Contains(t, "condition") || strings.Contains(t, "branch") {
+			condExpr := compileConditionExpr(t, props)
+			trueFlow := compileDownstreamFlowByPort(targetID, "flow_true", outgoingConns, nodeMap, depth+1)
+			falseFlow := compileDownstreamFlowByPort(targetID, "flow_false", outgoingConns, nodeMap, depth+1)
+
+			lines = append(lines, fmt.Sprintf("%sif (%s)", indent, condExpr))
+			lines = append(lines, indent+"{")
+			if trueFlow != "" {
+				lines = append(lines, trueFlow)
+			} else {
+				lines = append(lines, indent+"    // Condition passed")
+			}
+			lines = append(lines, indent+"}")
+			if falseFlow != "" {
+				lines = append(lines, indent+"else")
+				lines = append(lines, indent+"{")
+				lines = append(lines, falseFlow)
+				lines = append(lines, indent+"}")
+			}
+		} else if strings.Contains(t, "give_health") {
+			hp := 50
+			armor := 25
+			if props != nil {
+				if v, ok := props["healthAmount"].(float64); ok {
+					hp = int(v)
+				} else if v, ok := props["amount"].(float64); ok {
+					hp = int(v)
+				}
+				if v, ok := props["armorAmount"].(float64); ok {
+					armor = int(v)
+				}
+			}
+			lines = append(lines, indent+"var pawn = player.PlayerPawn?.Value;")
+			lines = append(lines, indent+"if (pawn != null && pawn.IsValid)")
+			lines = append(lines, indent+"{")
+			lines = append(lines, fmt.Sprintf("%s    pawn.Health = Math.Min(200, pawn.Health + %d);", indent, hp))
+			if armor > 0 {
+				lines = append(lines, fmt.Sprintf("%s    pawn.ArmorValue = Math.Min(100, pawn.ArmorValue + %d);", indent, armor))
+			}
+			lines = append(lines, indent+"}")
+			next := compileDownstreamFlow(targetID, outgoingConns, nodeMap, depth)
+			if next != "" {
+				lines = append(lines, next)
+			}
+		} else if strings.Contains(t, "give_weapon") {
+			weapon := "weapon_awp"
+			if props != nil {
+				if w, ok := props["weapon_name"].(string); ok && w != "" {
+					weapon = w
+				} else if w, ok := props["weapon"].(string); ok && w != "" {
+					weapon = w
+				}
+			}
+			lines = append(lines, fmt.Sprintf("%splayer.GiveNamedItem(\"%s\");", indent, weapon))
+			next := compileDownstreamFlow(targetID, outgoingConns, nodeMap, depth)
+			if next != "" {
+				lines = append(lines, next)
+			}
+		} else if strings.Contains(t, "print_center_html") || strings.Contains(t, "center_message") {
+			msg := "<font color='lime'>Action Executed!</font>"
+			if props != nil {
+				if m, ok := props["messageHtml"].(string); ok && m != "" {
+					msg = m
+				} else if m, ok := props["message"].(string); ok && m != "" {
+					msg = m
+				}
+			}
+			lines = append(lines, fmt.Sprintf("%splayer.PrintToCenterHtml(\"%s\");", indent, strings.ReplaceAll(msg, "\"", "\\\"")))
+			next := compileDownstreamFlow(targetID, outgoingConns, nodeMap, depth)
+			if next != "" {
+				lines = append(lines, next)
+			}
+		} else if strings.Contains(t, "print_chat") || strings.Contains(t, "chat_message") {
+			msg := "{Orange}[CS2Panel]{White} Action Executed!"
+			if props != nil {
+				if m, ok := props["message"].(string); ok && m != "" {
+					msg = m
+				} else if m, ok := props["text"].(string); ok && m != "" {
+					msg = m
+				}
+			}
+			lines = append(lines, fmt.Sprintf("%splayer.PrintToChat(\" %s\");", indent, strings.ReplaceAll(msg, "\"", "\\\"")))
+			next := compileDownstreamFlow(targetID, outgoingConns, nodeMap, depth)
+			if next != "" {
+				lines = append(lines, next)
+			}
+		} else if strings.Contains(t, "add_money") || strings.Contains(t, "give_money") {
+			amount := 500
+			if props != nil {
+				if a, ok := props["amount"].(float64); ok {
+					amount = int(a)
+				}
+			}
+			lines = append(lines, indent+"var moneySvc = player.InGameMoneyServices;")
+			lines = append(lines, fmt.Sprintf("%sif (moneySvc != null) moneySvc.Account += %d;", indent, amount))
+			next := compileDownstreamFlow(targetID, outgoingConns, nodeMap, depth)
+			if next != "" {
+				lines = append(lines, next)
+			}
+		} else if strings.Contains(t, "set_speed") {
+			speed := 1.2
+			if props != nil {
+				if s, ok := props["speed"].(float64); ok {
+					speed = s
+				}
+			}
+			lines = append(lines, indent+"var pPawn = player.PlayerPawn?.Value;")
+			lines = append(lines, fmt.Sprintf("%sif (pPawn != null && pPawn.IsValid) pPawn.VelocityModifier = %.2ff;", indent, speed))
+			next := compileDownstreamFlow(targetID, outgoingConns, nodeMap, depth)
+			if next != "" {
+				lines = append(lines, next)
+			}
+		} else {
+			title := targetNode.Title
+			if title == "" {
+				title = "Action"
+			}
+			lines = append(lines, fmt.Sprintf("%s// Node [%s] executed", indent, title))
+			next := compileDownstreamFlow(targetID, outgoingConns, nodeMap, depth)
+			if next != "" {
+				lines = append(lines, next)
+			}
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func compileDownstreamFlowByPort(nodeID, portID string, outgoingConns map[string][]ConnectionItem, nodeMap map[string]NodeItem, depth int) string {
+	var filtered []ConnectionItem
+	for _, c := range outgoingConns[nodeID] {
+		if c.FromPortID == portID {
+			filtered = append(filtered, c)
+		}
+	}
+	m := make(map[string][]ConnectionItem)
+	m[nodeID] = filtered
+	return compileDownstreamFlow(nodeID, m, nodeMap, depth)
+}
+
+func compileConditionExpr(t string, props map[string]interface{}) string {
+	if strings.Contains(t, "has_permission") {
+		perm := "@css/vip"
+		if props != nil {
+			if p, ok := props["permission"].(string); ok && p != "" {
+				perm = p
+			}
+		}
+		return fmt.Sprintf("AdminManager.PlayerHasPermissions(player, \"%s\")", perm)
+	}
+	if strings.Contains(t, "is_headshot") {
+		return "@event.Headshot"
+	}
+	if strings.Contains(t, "is_bot") {
+		return "!player.IsBot"
+	}
+	return "true"
+}
+
+func renderDefaultEventHandlers(className string) []string {
+	return []string{
+		fmt.Sprintf(`    [GameEventHandler]
     public HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info)
     {
         var player = @event.Userid;
@@ -662,9 +940,8 @@ public class %sPlugin : BasePlugin
 
         player.PrintToChat($" {ChatColors.Orange}[%s]{ChatColors.White} Plugin active on this server!");
         return HookResult.Continue;
-    }
-
-    [GameEventHandler]
+    }`, className),
+		`    [GameEventHandler]
     public HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
     {
         var player = @event.Userid;
@@ -676,9 +953,8 @@ public class %sPlugin : BasePlugin
             pawn.Health = Math.Min(200, pawn.Health + 20);
         }
         return HookResult.Continue;
-    }
-
-    [GameEventHandler]
+    }`,
+		`    [GameEventHandler]
     public HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
     {
         var attacker = @event.Attacker;
@@ -695,18 +971,14 @@ public class %sPlugin : BasePlugin
             }
         }
         return HookResult.Continue;
-    }
-
-    [GameEventHandler]
+    }`,
+		fmt.Sprintf(`    [GameEventHandler]
     public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
         Console.WriteLine("[%s] Round started.");
         return HookResult.Continue;
-    }
-
-%s
-}
-`, className, className, className, len(graph.Nodes), className, loadBody, className, className, cmdBody)
+    }`, className),
+	}
 }
 
 func (a *ClientAgent) queryOllamaForCSharp(className string, graphBytes []byte) (string, error) {
