@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -376,6 +377,29 @@ func (s *APIServer) handleLogWS(c *gin.Context) {
 		return
 	}
 
+	// 1. Replay recent logs on connection
+	recent := proc.GetRecentLogs()
+	for _, line := range recent {
+		if err := ws.WriteMessage(websocket.TextMessage, []byte(line)); err != nil {
+			return
+		}
+	}
+
+	// 2. Incoming message listener for executing RCON commands over WS
+	go func() {
+		for {
+			_, msg, err := ws.ReadMessage()
+			if err != nil {
+				break
+			}
+			cmdText := strings.TrimSpace(string(msg))
+			if cmdText != "" {
+				_, _ = proc.ExecuteRCON(cmdText)
+			}
+		}
+	}()
+
+	// 3. Real-time log broadcasting
 	ch, cancel := proc.SubscribeLogs()
 	defer cancel()
 

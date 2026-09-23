@@ -15,14 +15,68 @@ export default function ServerConsolePage() {
   const [command, setCommand] = useState('');
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const [isLiveWs, setIsLiveWs] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const lastLogIndexRef = useRef(0);
+  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     fetchApi(`/servers/${serverId}`)
       .then((data) => setServer(data))
       .catch(() => {});
+  }, [serverId]);
+
+  // Real-time WebSocket connection
+  useEffect(() => {
+    if (!server?.uuid) return;
+
+    let ws: WebSocket | null = null;
+    let isMounted = true;
+
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${proto}//${window.location.host}/daemon/api/v1/servers/${server.uuid}/logs/ws`;
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        if (!isMounted) return;
+        setIsLiveWs(true);
+      };
+
+      ws.onmessage = (event) => {
+        if (!isMounted) return;
+        const line = event.data;
+        if (typeof line === 'string' && line.length > 0) {
+          setLogs((prev) => [...prev, line]);
+        }
+      };
+
+      ws.onclose = () => {
+        if (!isMounted) return;
+        setIsLiveWs(false);
+      };
+
+      ws.onerror = () => {
+        if (!isMounted) return;
+        setIsLiveWs(false);
+      };
+
+      wsRef.current = ws;
+    } catch {
+      setIsLiveWs(false);
+    }
+
+    return () => {
+      isMounted = false;
+      if (ws) ws.close();
+      wsRef.current = null;
+    };
+  }, [server?.uuid]);
+
+  // Fallback HTTP polling if WebSocket is not active
+  useEffect(() => {
+    if (isLiveWs) return;
 
     // Initial fetch
     fetchApi(`/servers/${serverId}/logs`)
@@ -30,17 +84,10 @@ export default function ServerConsolePage() {
         if (data && Array.isArray(data.logs) && data.logs.length > 0) {
           setLogs(data.logs);
           lastLogIndexRef.current = data.logs.length;
-        } else {
-          setLogs([
-            '>>> [CS2Panel] Connecting to Source 2 Server RCON Console...',
-            '>>> [Engine] Source 2 Dedicated Server initialized',
-            '>>> [CS2Panel] Ready for RCON commands (Type help or cvar name)',
-          ]);
         }
       })
       .catch(() => {});
 
-    // Poll new incoming log lines every 2 seconds
     const interval = setInterval(() => {
       fetchApi(`/servers/${serverId}/logs`)
         .then((data) => {
@@ -51,16 +98,15 @@ export default function ServerConsolePage() {
             lastLogIndexRef.current = totalCount;
             setLogs((prev) => [...prev, ...newLines]);
           } else if (totalCount < lastLogIndexRef.current) {
-            // Buffer was reset or server restarted
             lastLogIndexRef.current = totalCount;
             setLogs(data.logs);
           }
         })
         .catch(() => {});
-    }, 2000);
+    }, 1500);
 
     return () => clearInterval(interval);
-  }, [serverId]);
+  }, [serverId, isLiveWs]);
 
   const handleScroll = () => {
     if (!scrollContainerRef.current) return;
@@ -88,16 +134,17 @@ export default function ServerConsolePage() {
       scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
     }
 
-    try {
-      const res = await fetchApi(`/servers/${serverId}/rcon`, {
-        method: 'POST',
-        body: JSON.stringify({ command: cmdToSend }),
-      });
-      if (res && res.response) {
-        setLogs((prev) => [...prev, res.response]);
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(cmdToSend);
+    } else {
+      try {
+        await fetchApi(`/servers/${serverId}/rcon`, {
+          method: 'POST',
+          body: JSON.stringify({ command: cmdToSend }),
+        });
+      } catch (err: any) {
+        setLogs((prev) => [...prev, `[ERROR] RCON Failed: ${err.message}`]);
       }
-    } catch (err: any) {
-      setLogs((prev) => [...prev, `[ERROR] RCON Failed: ${err.message}`]);
     }
   };
 
@@ -173,7 +220,18 @@ export default function ServerConsolePage() {
         <div className="h-10 bg-cs2-surface border-b border-cs2-border px-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Terminal className="w-4 h-4 text-cs2-orange" />
-            <span className="text-xs font-bold text-white tracking-wider">CS2 RCON TERMINAL (Subtick 128)</span>
+            <span className="text-xs font-bold text-white tracking-wider">CS2 RCON TERMINAL</span>
+            {isLiveWs ? (
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[10px] font-bold border border-emerald-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span>WS LIVE (0ms)</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 text-[10px] font-bold border border-amber-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                <span>HTTP POLLING</span>
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button

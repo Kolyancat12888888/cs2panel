@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -158,19 +159,38 @@ func (s *ServerProcess) Start() error {
 
 	var cmd *exec.Cmd
 
-	if _, err := os.Stat(cs2Script); err == nil {
-		_ = os.Chmod(cs2Script, 0755)
-		cmd = exec.Command(cs2Script, args...)
-		cmd.Dir = filepath.Join(s.InstanceDir, "game")
-	} else if _, err := os.Stat(cs2Binary); err == nil {
-		_ = os.Chmod(cs2Binary, 0755)
-		cmd = exec.Command(cs2Binary, args...)
-		cmd.Dir = linuxBinDir
-	} else {
-		// Fallback for Windows or direct binary
-		winBin := filepath.Join(s.InstanceDir, "game", "bin", "win64", "cs2.exe")
-		cmd = exec.Command(winBin, args...)
-		cmd.Dir = filepath.Join(s.InstanceDir, "game", "bin", "win64")
+	// On Linux, use stdbuf to disable stdout/stderr block buffering for instant line-by-line streaming
+	if runtime.GOOS != "windows" {
+		if stdbufPath, err := exec.LookPath("stdbuf"); err == nil {
+			if _, err := os.Stat(cs2Script); err == nil {
+				_ = os.Chmod(cs2Script, 0755)
+				stdbufArgs := append([]string{"-oL", "-eL", cs2Script}, args...)
+				cmd = exec.Command(stdbufPath, stdbufArgs...)
+				cmd.Dir = filepath.Join(s.InstanceDir, "game")
+			} else if _, err := os.Stat(cs2Binary); err == nil {
+				_ = os.Chmod(cs2Binary, 0755)
+				stdbufArgs := append([]string{"-oL", "-eL", cs2Binary}, args...)
+				cmd = exec.Command(stdbufPath, stdbufArgs...)
+				cmd.Dir = linuxBinDir
+			}
+		}
+	}
+
+	if cmd == nil {
+		if _, err := os.Stat(cs2Script); err == nil {
+			_ = os.Chmod(cs2Script, 0755)
+			cmd = exec.Command(cs2Script, args...)
+			cmd.Dir = filepath.Join(s.InstanceDir, "game")
+		} else if _, err := os.Stat(cs2Binary); err == nil {
+			_ = os.Chmod(cs2Binary, 0755)
+			cmd = exec.Command(cs2Binary, args...)
+			cmd.Dir = linuxBinDir
+		} else {
+			// Fallback for Windows or direct binary
+			winBin := filepath.Join(s.InstanceDir, "game", "bin", "win64", "cs2.exe")
+			cmd = exec.Command(winBin, args...)
+			cmd.Dir = filepath.Join(s.InstanceDir, "game", "bin", "win64")
+		}
 	}
 
 	cmd.Env = append(os.Environ(),
@@ -274,10 +294,16 @@ func (s *ServerProcess) ExecuteRCON(cmd string) (string, error) {
 }
 
 func (s *ServerProcess) pipeLogs(r io.Reader) {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := scanner.Text()
-		s.broadcastLog(line)
+	reader := bufio.NewReader(r)
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			cleanLine := strings.TrimRight(line, "\r\n")
+			s.broadcastLog(cleanLine)
+		}
+		if err != nil {
+			break
+		}
 	}
 }
 
