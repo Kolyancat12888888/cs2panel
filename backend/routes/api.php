@@ -103,6 +103,8 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     // ─── CLIENT AI AGENTS ───
     Route::middleware('permission:agents.view')->group(function () {
         Route::get('/agents', [AgentGatewayController::class, 'listAgents']);
+        Route::post('/agents/token', [AgentGatewayController::class, 'provisionToken']);
+        Route::delete('/agents/{id}', [AgentGatewayController::class, 'destroy']);
     });
 
     // ─── VISUAL PLUGIN STUDIO (.cs2graph) ───

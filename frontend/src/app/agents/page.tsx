@@ -13,7 +13,12 @@ import {
   Plus, 
   RefreshCw,
   Terminal,
-  Layers
+  Layers,
+  Copy,
+  Check,
+  Key,
+  Trash2,
+  ExternalLink
 } from 'lucide-react';
 import { fetchApi } from '@/lib/api';
 
@@ -33,10 +38,28 @@ interface AgentData {
   created_at: string;
 }
 
+interface ProvisionedTokenData {
+  token: string;
+  server_url: string;
+  windows_cli: string;
+  linux_cli: string;
+  config_json: {
+    platform_url: string;
+    agent_token: string;
+    heartbeat_seconds: number;
+    local_llm_url: string;
+  };
+}
+
 export default function ClientAgentsPage() {
   const [agents, setAgents] = useState<AgentData[]>([]);
   const [loading, setLoading] = useState(true);
   const [installModalOpen, setInstallModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'windows' | 'cli' | 'json'>('windows');
+  
+  const [tokenData, setTokenData] = useState<ProvisionedTokenData | null>(null);
+  const [tokenLoading, setTokenLoading] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const loadAgents = () => {
     setLoading(true);
@@ -52,6 +75,69 @@ export default function ClientAgentsPage() {
       .finally(() => {
         setLoading(false);
       });
+  };
+
+  const generateNewToken = async () => {
+    setTokenLoading(true);
+    try {
+      const res = await fetchApi('/agents/token', { method: 'POST' });
+      // Fallback server_url to current browser origin if server is behind reverse proxy
+      const origin = typeof window !== 'undefined' ? window.location.origin : (res.server_url || 'http://127.0.0.1:8000');
+      const token = res.token || 'agt_' + Math.random().toString(36).substring(2, 15);
+      
+      setTokenData({
+        token: token,
+        server_url: origin,
+        windows_cli: `.\\cs2agent.exe -server "${origin}" -token "${token}" -install-service`,
+        linux_cli: `./cs2agent-linux-amd64 -server "${origin}" -token "${token}" -install-service`,
+        config_json: {
+          platform_url: origin,
+          agent_token: token,
+          heartbeat_seconds: 5,
+          local_llm_url: 'http://127.0.0.1:11434'
+        }
+      });
+    } catch (e) {
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8000';
+      const token = 'agt_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      setTokenData({
+        token: token,
+        server_url: origin,
+        windows_cli: `.\\cs2agent.exe -server "${origin}" -token "${token}" -install-service`,
+        linux_cli: `./cs2agent-linux-amd64 -server "${origin}" -token "${token}" -install-service`,
+        config_json: {
+          platform_url: origin,
+          agent_token: token,
+          heartbeat_seconds: 5,
+          local_llm_url: 'http://127.0.0.1:11434'
+        }
+      });
+    } finally {
+      setTokenLoading(false);
+    }
+  };
+
+  const openConnectModal = () => {
+    setInstallModalOpen(true);
+    if (!tokenData) {
+      generateNewToken();
+    }
+  };
+
+  const copyToClipboard = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2500);
+  };
+
+  const deleteAgent = async (id: number) => {
+    if (!confirm('Are you sure you want to disconnect and delete this agent node?')) return;
+    try {
+      await fetchApi(`/agents/${id}`, { method: 'DELETE' });
+      setAgents((prev) => prev.filter((a) => a.id !== id));
+    } catch (e) {
+      alert('Failed to delete agent: ' + (e instanceof Error ? e.message : String(e)));
+    }
   };
 
   useEffect(() => {
@@ -75,7 +161,7 @@ export default function ClientAgentsPage() {
             </span>
           </div>
           <p className="text-sm text-cs2-muted mt-1">
-            Agents run locally on your gaming PC or dev machine. They compile plugins via .NET 8, provide local Ollama LLM acceleration, and execute jobs with zero open inward ports.
+            Agents run locally on your gaming PC, friend's machine, or node server. They compile plugins via .NET 8, provide local Ollama LLM acceleration, and execute jobs with zero inward ports.
           </p>
         </div>
 
@@ -88,11 +174,11 @@ export default function ClientAgentsPage() {
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-cs2-orange' : ''}`} />
           </button>
           <button 
-            onClick={() => setInstallModalOpen(true)}
+            onClick={openConnectModal}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-cs2-orange hover:bg-cs2-orange/90 text-black text-sm font-semibold transition shadow-lg shadow-cs2-orange/20"
           >
-            <Download className="w-4 h-4" />
-            Connect New Agent (PowerShell)
+            <Plus className="w-4 h-4" />
+            Connect New Agent (Token & CLI)
           </button>
         </div>
       </div>
@@ -106,14 +192,14 @@ export default function ClientAgentsPage() {
           <div>
             <h3 className="text-base font-bold text-white">No Client Agents Connected Yet</h3>
             <p className="text-xs text-cs2-muted mt-1 leading-relaxed">
-              Connect your Windows PC or Linux machine using our 1-click PowerShell installer to enable local .NET 8 compilation and Ollama AI code generation.
+              Connect your Windows PC or give a token to a friend to enable local .NET 8 compilation and Ollama GPU AI computation across your Swarm.
             </p>
           </div>
           <button
-            onClick={() => setInstallModalOpen(true)}
+            onClick={openConnectModal}
             className="px-5 py-2.5 rounded-xl bg-cs2-orange text-black font-bold text-xs inline-flex items-center gap-2"
           >
-            <Download className="w-4 h-4" /> Connect Your Computer
+            <Download className="w-4 h-4" /> Connect Your Computer / Friend
           </button>
         </div>
       )}
@@ -123,7 +209,7 @@ export default function ClientAgentsPage() {
         {agents.map((agent) => (
           <div 
             key={agent.id}
-            className="p-5 rounded-xl bg-cs2-card border border-cs2-border flex flex-col justify-between space-y-4"
+            className="p-5 rounded-xl bg-cs2-card border border-cs2-border flex flex-col justify-between space-y-4 relative group"
           >
             <div>
               <div className="flex items-start justify-between">
@@ -143,13 +229,22 @@ export default function ClientAgentsPage() {
                         {agent.status.toUpperCase()}
                       </span>
                     </div>
-                    <div className="text-xs text-cs2-muted mt-0.5">{agent.os} ({agent.arch}) • {agent.agent_id}</div>
+                    <div className="text-xs text-cs2-muted mt-0.5">{agent.os} ({agent.arch}) • <span className="font-mono text-cs2-orange">{agent.agent_id}</span></div>
                   </div>
                 </div>
 
-                <div className="text-right text-xs">
-                  <div className="text-cs2-muted">Last Heartbeat</div>
-                  <div className="text-white font-medium">{agent.last_heartbeat_at ? new Date(agent.last_heartbeat_at).toLocaleTimeString() : 'Recent'}</div>
+                <div className="flex items-center gap-2">
+                  <div className="text-right text-xs mr-2">
+                    <div className="text-cs2-muted">Last Heartbeat</div>
+                    <div className="text-white font-medium">{agent.last_heartbeat_at ? new Date(agent.last_heartbeat_at).toLocaleTimeString() : 'Recent'}</div>
+                  </div>
+                  <button
+                    onClick={() => deleteAgent(agent.id)}
+                    className="p-1.5 rounded-lg bg-cs2-surface hover:bg-red-500/20 text-cs2-muted hover:text-red-400 transition"
+                    title="Remove Agent"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
 
@@ -212,14 +307,14 @@ export default function ClientAgentsPage() {
         ))}
       </div>
 
-      {/* Install Instruction Modal */}
+      {/* Connect & Setup Modal */}
       {installModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-xl rounded-2xl bg-cs2-card border border-cs2-border p-6 shadow-2xl space-y-5">
+          <div className="w-full max-w-2xl rounded-2xl bg-cs2-card border border-cs2-border p-6 shadow-2xl space-y-5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Bot className="w-6 h-6 text-cs2-orange" />
-                <h3 className="text-lg font-bold text-white">Connect Windows/Linux Client Agent</h3>
+                <h3 className="text-lg font-bold text-white">Connect Windows / Linux Client Agent</h3>
               </div>
               <button
                 onClick={() => setInstallModalOpen(false)}
@@ -229,19 +324,119 @@ export default function ClientAgentsPage() {
               </button>
             </div>
 
-            <div className="space-y-3 text-sm text-cs2-muted">
-              <p>
-                Run this single command in PowerShell on your Windows PC to download, register, and start the background Agent service:
-              </p>
+            {/* Generated Secret Token Banner */}
+            <div className="p-4 rounded-xl bg-cs2-surface border border-cs2-border space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-cs2-muted flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-cs2-orange" /> Unique Agent Authentication Token
+                </span>
+                <button
+                  onClick={generateNewToken}
+                  disabled={tokenLoading}
+                  className="text-xs text-cs2-orange hover:underline flex items-center gap-1"
+                >
+                  <RefreshCw className={`w-3 h-3 ${tokenLoading ? 'animate-spin' : ''}`} /> Regenerate
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-3 bg-black/70 p-2.5 rounded-lg border border-cs2-border">
+                <span className="font-mono text-sm text-cs2-green font-semibold select-all break-all">
+                  {tokenData?.token || 'Generating token...'}
+                </span>
+                <button
+                  onClick={() => tokenData && copyToClipboard(tokenData.token, 'token')}
+                  className="px-3 py-1.5 rounded bg-cs2-surface hover:bg-cs2-border text-xs text-white flex items-center gap-1.5 shrink-0 transition"
+                >
+                  {copiedKey === 'token' ? <Check className="w-3.5 h-3.5 text-cs2-green" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedKey === 'token' ? 'Copied!' : 'Copy Token'}
+                </button>
+              </div>
+            </div>
 
-              <div className="p-4 rounded-xl bg-black/80 border border-cs2-border font-mono text-xs text-cs2-orange flex items-center justify-between select-all">
-                <span>powershell -ExecutionPolicy Bypass -File .\client-agent\installer\install.ps1</span>
+            {/* Tabs for Installation Methods */}
+            <div className="space-y-3">
+              <div className="flex gap-2 border-b border-cs2-border pb-2 text-xs font-semibold">
+                <button
+                  onClick={() => setActiveTab('windows')}
+                  className={`px-3 py-1.5 rounded-lg transition ${activeTab === 'windows' ? 'bg-cs2-orange text-black font-bold' : 'text-cs2-muted hover:text-white'}`}
+                >
+                  1. Windows 1-Click CLI (Recommended)
+                </button>
+                <button
+                  onClick={() => setActiveTab('cli')}
+                  className={`px-3 py-1.5 rounded-lg transition ${activeTab === 'cli' ? 'bg-cs2-orange text-black font-bold' : 'text-cs2-muted hover:text-white'}`}
+                >
+                  2. Linux Daemon
+                </button>
+                <button
+                  onClick={() => setActiveTab('json')}
+                  className={`px-3 py-1.5 rounded-lg transition ${activeTab === 'json' ? 'bg-cs2-orange text-black font-bold' : 'text-cs2-muted hover:text-white'}`}
+                >
+                  3. config.json
+                </button>
               </div>
 
-              <div className="p-3 rounded-lg bg-cs2-surface border border-cs2-border text-xs space-y-1">
-                <div className="font-semibold text-white">Zero Inward Ports / Zero Firewall Setup</div>
-                <div>The Client Agent connects outbound to the panel WebSocket. Your IP and ports are never exposed.</div>
+              {activeTab === 'windows' && (
+                <div className="space-y-3 text-xs text-cs2-muted">
+                  <p>
+                    Open PowerShell / Terminal in the folder with <code className="text-white bg-cs2-surface px-1 py-0.5 rounded">cs2agent.exe</code> and run this command. It will write your token and register the agent in Windows Task Scheduler:
+                  </p>
+                  <div className="p-3.5 rounded-xl bg-black/90 border border-cs2-border font-mono text-xs text-cs2-orange flex items-center justify-between gap-3 select-all">
+                    <span className="break-all">{tokenData?.windows_cli || 'Loading...'}</span>
+                    <button
+                      onClick={() => tokenData && copyToClipboard(tokenData.windows_cli, 'win_cli')}
+                      className="px-3 py-1.5 rounded bg-cs2-surface hover:bg-cs2-border text-xs text-white flex items-center gap-1.5 shrink-0 transition"
+                    >
+                      {copiedKey === 'win_cli' ? <Check className="w-3.5 h-3.5 text-cs2-green" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copiedKey === 'win_cli' ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'cli' && (
+                <div className="space-y-3 text-xs text-cs2-muted">
+                  <p>
+                    On Linux, run the agent with the <code className="text-white bg-cs2-surface px-1 py-0.5 rounded">-install-service</code> flag to generate and start a systemd background service:
+                  </p>
+                  <div className="p-3.5 rounded-xl bg-black/90 border border-cs2-border font-mono text-xs text-cs2-orange flex items-center justify-between gap-3 select-all">
+                    <span className="break-all">{tokenData?.linux_cli || 'Loading...'}</span>
+                    <button
+                      onClick={() => tokenData && copyToClipboard(tokenData.linux_cli, 'lin_cli')}
+                      className="px-3 py-1.5 rounded bg-cs2-surface hover:bg-cs2-border text-xs text-white flex items-center gap-1.5 shrink-0 transition"
+                    >
+                      {copiedKey === 'lin_cli' ? <Check className="w-3.5 h-3.5 text-cs2-green" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copiedKey === 'lin_cli' ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'json' && (
+                <div className="space-y-3 text-xs text-cs2-muted">
+                  <p>
+                    Alternatively, save this content as <code className="text-white bg-cs2-surface px-1 py-0.5 rounded">~/.cs2panel/agent_config.json</code>:
+                  </p>
+                  <div className="p-3.5 rounded-xl bg-black/90 border border-cs2-border font-mono text-xs text-cs2-orange relative group">
+                    <pre className="overflow-x-auto select-all">
+                      {JSON.stringify(tokenData?.config_json, null, 2)}
+                    </pre>
+                    <button
+                      onClick={() => tokenData && copyToClipboard(JSON.stringify(tokenData.config_json, null, 2), 'cfg_json')}
+                      className="absolute top-3 right-3 px-3 py-1.5 rounded bg-cs2-surface hover:bg-cs2-border text-xs text-white flex items-center gap-1.5 transition"
+                    >
+                      {copiedKey === 'cfg_json' ? <Check className="w-3.5 h-3.5 text-cs2-green" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copiedKey === 'cfg_json' ? 'Copied' : 'Copy JSON'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-3 rounded-lg bg-cs2-surface border border-cs2-border text-xs space-y-1 text-cs2-muted">
+              <div className="font-semibold text-white flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-cs2-green" /> Zero Inward Ports & NAT Traversal
               </div>
+              <div>The Client Agent establishes an outbound persistent channel to the panel. Your friend doesn't need to open any ports or firewall settings.</div>
             </div>
 
             <div className="flex justify-end pt-2">

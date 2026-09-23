@@ -1439,14 +1439,62 @@ func (a *ClientAgent) sendJobResult(res JobResult) {
 
 func main() {
 	configPathFlag := flag.String("config", "", "Path to agent_config.json")
+	serverFlag := flag.String("server", "", "Panel central server URL (e.g. http://127.0.0.1:8000)")
+	tokenFlag := flag.String("token", "", "Agent secret authentication token")
+	nameFlag := flag.String("name", "", "Custom device/agent name")
 	installServiceFlag := flag.Bool("install-service", false, "Register agent in Windows Task Scheduler / systemd autostart service")
 	uninstallServiceFlag := flag.Bool("uninstall-service", false, "Unregister agent autostart service")
 	headlessFlag := flag.Bool("headless", false, "Run in silent background daemon mode")
 	flag.Parse()
 
+	homeDir, _ := os.UserHomeDir()
+	configPath := *configPathFlag
+	if configPath == "" {
+		_ = os.MkdirAll(filepath.Join(homeDir, ".cs2panel"), 0755)
+		configPath = filepath.Join(homeDir, ".cs2panel", "agent_config.json")
+	}
+
+	cfg := &AgentConfig{}
+	fileData, err := os.ReadFile(configPath)
+	if err == nil {
+		_ = json.Unmarshal(fileData, cfg)
+	} else {
+		cfg.AgentID = "agent_" + fmt.Sprintf("%x", time.Now().UnixNano())[:16]
+		cfg.DeviceName, _ = os.Hostname()
+		cfg.DeviceID = "dev_" + strings.ToLower(cfg.DeviceName)
+		cfg.PlatformURL = "http://127.0.0.1:8000"
+		cfg.AgentToken = "agt_" + fmt.Sprintf("%x", time.Now().UnixNano())
+		cfg.WorkspaceDir = filepath.Join(homeDir, ".cs2panel", "agent_workspace")
+		cfg.LocalLLMURL = "http://127.0.0.1:11434"
+	}
+
+	// Override config with CLI flags if specified
+	if *serverFlag != "" {
+		cfg.PlatformURL = *serverFlag
+	}
+	if *tokenFlag != "" {
+		cfg.AgentToken = *tokenFlag
+	}
+	if *nameFlag != "" {
+		cfg.DeviceName = *nameFlag
+	}
+
+	// Always save updated config if server/token was explicitly given
+	if *serverFlag != "" || *tokenFlag != "" || *nameFlag != "" || err != nil {
+		if cfgJSON, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+			_ = os.WriteFile(configPath, cfgJSON, 0644)
+			if !*headlessFlag {
+				log.Printf("[CS2 AI Client] Saved agent configuration to %s", configPath)
+			}
+		}
+	}
+
 	if *installServiceFlag {
 		if err := installService(); err != nil {
 			log.Fatalf("[SERVICE ERROR] %v", err)
+		}
+		if !*headlessFlag {
+			log.Println("[CS2 AI Client] Autostart service successfully registered!")
 		}
 		os.Exit(0)
 	}
@@ -1454,6 +1502,9 @@ func main() {
 	if *uninstallServiceFlag {
 		if err := uninstallService(); err != nil {
 			log.Fatalf("[SERVICE ERROR] %v", err)
+		}
+		if !*headlessFlag {
+			log.Println("[CS2 AI Client] Autostart service successfully unregistered!")
 		}
 		os.Exit(0)
 	}
@@ -1463,30 +1514,8 @@ func main() {
 		log.Println("     CS2Panel AI Swarm Agent & Autonomous Compute Node    ")
 		log.Println("  Decentralized Mesh • .NET 8 SDK • Ollama GPU Engine     ")
 		log.Println("==========================================================")
-	}
-
-	homeDir, _ := os.UserHomeDir()
-	configPath := *configPathFlag
-	if configPath == "" {
-		configPath = filepath.Join(homeDir, ".cs2panel", "agent_config.json")
-	}
-
-	cfg := &AgentConfig{}
-	fileData, err := os.ReadFile(configPath)
-	if err == nil {
-		_ = json.Unmarshal(fileData, cfg)
-		if !*headlessFlag {
-			log.Printf("[CS2 AI Client] Loaded config from %s", configPath)
-		}
-	} else {
-		log.Printf("[CS2 AI Client] Notice: Config file not found at %s, using defaults", configPath)
-		cfg.AgentID = "agent_" + fmt.Sprintf("%x", time.Now().UnixNano())[:16]
-		cfg.DeviceName, _ = os.Hostname()
-		cfg.DeviceID = "dev_" + strings.ToLower(cfg.DeviceName)
-		cfg.PlatformURL = "http://127.0.0.1:8000"
-		cfg.AgentToken = "agent_sec_" + fmt.Sprintf("%x", time.Now().UnixNano())
-		cfg.WorkspaceDir = filepath.Join(homeDir, ".cs2panel", "agent_workspace")
-		cfg.LocalLLMURL = "http://127.0.0.1:11434"
+		log.Printf("[CS2 AI Client] Loaded config from %s", configPath)
+		log.Printf("[CS2 AI Client] Target Server: %s | Agent Token: %s", cfg.PlatformURL, cfg.AgentToken)
 	}
 
 	if cfg.PlatformURL == "" {

@@ -143,4 +143,40 @@ class AgentGatewayController extends Controller
 
         return response()->json($query->latest()->get());
     }
+
+    // Provision a unique registration token and connection commands for a new agent
+    public function provisionToken(Request $request)
+    {
+        $token = 'agt_' . bin2hex(random_bytes(16));
+        $serverUrl = rtrim(config('app.url') ?: $request->root(), '/');
+
+        return response()->json([
+            'token' => $token,
+            'server_url' => $serverUrl,
+            'windows_cli' => "./cs2agent.exe -server \"$serverUrl\" -token \"$token\" -install-service",
+            'linux_cli' => "./cs2agent-linux-amd64 -server \"$serverUrl\" -token \"$token\" -install-service",
+            'config_json' => [
+                'platform_url' => $serverUrl,
+                'agent_token' => $token,
+                'heartbeat_seconds' => 5,
+                'local_llm_url' => 'http://127.0.0.1:11434'
+            ]
+        ]);
+    }
+
+    // Unregister / remove an agent
+    public function destroy(Request $request, $id)
+    {
+        $user = $request->user();
+        $query = Agent::where('id', $id);
+
+        if (!$user->isAdmin()) {
+            $query->where('user_id', $user->id);
+        }
+
+        $agent = $query->firstOrFail();
+        $agent->delete();
+
+        return response()->json(['message' => 'Agent removed successfully']);
+    }
 }
