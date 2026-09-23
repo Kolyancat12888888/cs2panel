@@ -602,6 +602,61 @@ func runPostUpdateHooks(cfg *Config) {
 			}
 		}
 	}
+
+	// Sync and reload Nginx configuration
+	updateNginxConfig(cfg)
+}
+
+func updateNginxConfig(cfg *Config) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+
+	srcConf := filepath.Join(cfg.TargetDir, "nginx", "cs2.hfl-nodes.pro.conf")
+	if _, err := os.Stat(srcConf); os.IsNotExist(err) {
+		return
+	}
+
+	srcData, err := os.ReadFile(srcConf)
+	if err != nil {
+		return
+	}
+
+	// 1. Sync to /etc/nginx/sites-available/cs2.hfl-nodes.pro.conf
+	sitesAvailDir := "/etc/nginx/sites-available"
+	if _, err := os.Stat(sitesAvailDir); err == nil {
+		targetFile := filepath.Join(sitesAvailDir, "cs2.hfl-nodes.pro.conf")
+		_ = os.WriteFile(targetFile, srcData, 0644)
+		log.Printf("[DEPLOYER] Synced Nginx config -> %s", targetFile)
+
+		// Create symlink to sites-enabled if directory exists
+		sitesEnabledDir := "/etc/nginx/sites-enabled"
+		if _, err := os.Stat(sitesEnabledDir); err == nil {
+			linkFile := filepath.Join(sitesEnabledDir, "cs2.hfl-nodes.pro.conf")
+			_ = os.Remove(linkFile)
+			_ = os.Symlink(targetFile, linkFile)
+		}
+	}
+
+	// 2. Sync to /etc/nginx/vhosts/www-root/cs2.hfl-nodes.pro.conf (ISPmanager / Vhosts)
+	vhostsDir := "/etc/nginx/vhosts/www-root"
+	if _, err := os.Stat(vhostsDir); err == nil {
+		targetVhost := filepath.Join(vhostsDir, "cs2.hfl-nodes.pro.conf")
+		_ = os.WriteFile(targetVhost, srcData, 0644)
+		log.Printf("[DEPLOYER] Synced Nginx config -> %s", targetVhost)
+	}
+
+	// Test & reload nginx
+	if _, err := exec.LookPath("nginx"); err == nil {
+		testCmd := exec.Command("nginx", "-t")
+		if err := testCmd.Run(); err == nil {
+			reloadCmd := exec.Command("systemctl", "reload", "nginx")
+			_ = reloadCmd.Run()
+			log.Println("[DEPLOYER] ✓ Nginx reloaded successfully with updated config")
+		} else {
+			log.Printf("[DEPLOYER] Nginx config test failed, skipping reload: %v", err)
+		}
+	}
 }
 
 func runCmd(dir string, name string, args ...string) {
