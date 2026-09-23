@@ -33,7 +33,6 @@ class User extends Authenticatable
 
     protected $casts = [
         'email_verified_at' => 'datetime',
-        'password' => 'hashed',
         'two_factor_enabled' => 'boolean',
         'server_limit' => 'integer',
         'is_banned' => 'boolean',
