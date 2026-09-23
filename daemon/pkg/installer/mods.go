@@ -4,23 +4,29 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
 	MetamodLinuxURL = "https://mms.alliedmods.net/mmsdrop/2.0/mmsource-2.0.0-git1411-linux.tar.gz"
-	CSSLatestURL    = "https://github.com/roflmuffin/CounterStrikeSharp/releases/latest/download/counterstrikesharp-with-runtime-build-latest-linux.zip"
+	CSSFallbackURL  = "https://github.com/roflmuffin/CounterStrikeSharp/releases/download/v1.0.374/counterstrikesharp-with-runtime-linux-1.0.374.zip"
 )
 
-type ModInstaller struct{}
+type ModInstaller struct {
+	client *http.Client
+}
 
 func NewModInstaller() *ModInstaller {
-	return &ModInstaller{}
+	return &ModInstaller{
+		client: &http.Client{Timeout: 90 * time.Second},
+	}
 }
 
 // InstallMetamodAndCSS downloads and unpacks Metamod 2-git1411 and CounterStrikeSharp Latest into instance
@@ -34,17 +40,60 @@ func (m *ModInstaller) InstallMetamodAndCSS(instanceRoot string) error {
 		return fmt.Errorf("failed to install metamod: %w", err)
 	}
 
-	// 2. Download and extract CounterStrikeSharp Latest
-	if err := m.downloadAndExtractZip(CSSLatestURL, csgoDir); err != nil {
+	// 2. Discover dynamic latest CounterStrikeSharp download URL
+	cssURL := m.getLatestCSSUrl()
+
+	// Download and extract CounterStrikeSharp Latest
+	if err := m.downloadAndExtractZip(cssURL, csgoDir); err != nil {
+		// Try fallback URL if dynamic failed
+		if cssURL != CSSFallbackURL {
+			if fallbackErr := m.downloadAndExtractZip(CSSFallbackURL, csgoDir); fallbackErr == nil {
+				goto Patched
+			}
+		}
 		return fmt.Errorf("failed to install CounterStrikeSharp: %w", err)
 	}
 
+Patched:
 	// 3. Patch gameinfo.gi for Metamod injection
 	if err := m.patchGameInfo(filepath.Join(csgoDir, "gameinfo.gi")); err != nil {
 		return fmt.Errorf("failed to patch gameinfo.gi: %w", err)
 	}
 
 	return nil
+}
+
+func (m *ModInstaller) getLatestCSSUrl() string {
+	req, err := http.NewRequest("GET", "https://api.github.com/repos/roflmuffin/CounterStrikeSharp/releases/latest", nil)
+	if err != nil {
+		return CSSFallbackURL
+	}
+	req.Header.Set("User-Agent", "CS2Panel-Installer/1.0")
+
+	resp, err := m.client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return CSSFallbackURL
+	}
+	defer resp.Body.Close()
+
+	var rel struct {
+		Assets []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return CSSFallbackURL
+	}
+
+	for _, a := range rel.Assets {
+		if strings.Contains(a.Name, "with-runtime") && strings.Contains(a.Name, "linux") && strings.HasSuffix(a.Name, ".zip") {
+			return a.BrowserDownloadURL
+		}
+	}
+
+	return CSSFallbackURL
 }
 
 func (m *ModInstaller) patchGameInfo(gameInfoPath string) error {
@@ -76,7 +125,13 @@ func (m *ModInstaller) patchGameInfo(gameInfoPath string) error {
 }
 
 func (m *ModInstaller) downloadAndExtractTarGz(url, destDir string) error {
-	resp, err := http.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "CS2Panel-Installer/1.0")
+
+	resp, err := m.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -127,7 +182,13 @@ func (m *ModInstaller) downloadAndExtractZip(url, destDir string) error {
 	defer os.Remove(tmpZip.Name())
 	defer tmpZip.Close()
 
-	resp, err := http.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "CS2Panel-Installer/1.0")
+
+	resp, err := m.client.Do(req)
 	if err != nil {
 		return err
 	}
