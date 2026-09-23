@@ -682,20 +682,47 @@ func (a *ClientAgent) queryOllamaForCSharp(className string, graphBytes []byte) 
 		llmURL = "http://127.0.0.1:11434"
 	}
 	modelName := a.config.LLMModel
+
+	// Auto-detect available models if not set or verify presence
+	tagsResp, err := http.Get(strings.TrimRight(llmURL, "/") + "/api/tags")
+	if err == nil && tagsResp.StatusCode == http.StatusOK {
+		var tags struct {
+			Models []struct {
+				Name string `json:"name"`
+			} `json:"models"`
+		}
+		if err := json.NewDecoder(tagsResp.Body).Decode(&tags); err == nil && len(tags.Models) > 0 {
+			found := false
+			for _, m := range tags.Models {
+				if m.Name == modelName {
+					found = true
+					break
+				}
+			}
+			if !found || modelName == "" {
+				modelName = tags.Models[0].Name
+				log.Printf("[CS2 AI Client] Using installed Ollama model: %s", modelName)
+			}
+		}
+		tagsResp.Body.Close()
+	}
+
 	if modelName == "" {
-		modelName = "qwen3-14b-tools:latest"
+		modelName = "qwen2.5-coder:7b"
 	}
 
 	endpoint := strings.TrimRight(llmURL, "/") + "/api/generate"
-	prompt := fmt.Sprintf(`You are an expert CounterStrikeSharp (.NET 8) C# compiler.
-Convert this exact visual node graph JSON into a clean, complete, production C# CounterStrikeSharp plugin:
-Class/Namespace: %s
+	prompt := fmt.Sprintf(`You are an expert CounterStrikeSharp (.NET 8) C# plugin developer.
+Generate clean, complete, production C# CounterStrikeSharp plugin code from this visual node graph AST JSON:
+Class / Namespace: %s
 Graph JSON:
 %s
 
-RULES:
-1. Implement all events, conditions, commands, weapons, health bonuses, and HUD elements described in the nodes.
-2. Return ONLY clean C# code without markdown code blocks or explanations.`, className, string(graphBytes))
+MANDATORY RULES:
+1. Inherit from BasePlugin and use [MinimumApiVersion(250)].
+2. Implement all event handlers, conditions, console commands, HUD notifications, and actions from the nodes.
+3. Use correct CounterStrikeSharp namespaces (CounterStrikeSharp.API, CounterStrikeSharp.API.Core, CounterStrikeSharp.API.Modules.Utils, CounterStrikeSharp.API.Modules.Commands, etc.).
+4. Return ONLY valid C# source code without markdown wrappers, backticks, or conversational text.`, className, string(graphBytes))
 
 	reqBody := OllamaGenerateRequest{
 		Model:  modelName,
@@ -708,7 +735,7 @@ RULES:
 		return "", err
 	}
 
-	client := &http.Client{Timeout: 90 * time.Second}
+	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Post(endpoint, "application/json", bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return "", err
