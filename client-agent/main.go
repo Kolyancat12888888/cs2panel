@@ -509,8 +509,22 @@ func (a *ClientAgent) processBuildJob(job *JobRequest) {
 
 // Real Visual Node Graph -> CounterStrikeSharp C# Compiler Engine
 func (a *ClientAgent) compileGraphToCSharp(className string, graphBytes []byte, result *JobResult) string {
-	result.Logs = append(result.Logs, "[Agent AST Engine] Compiling visual node connections and event triggers into CounterStrikeSharp C#...")
-	return a.generateDeterministicCSharp(className, graphBytes)
+	// Generate base AST code
+	baseAstCode := a.generateDeterministicCSharp(className, graphBytes)
+
+	// Try Local AI LLM (Ollama) to refine and generate production C#
+	if a.config.LocalLLMURL != "" {
+		result.Logs = append(result.Logs, "[Agent AI] 🧠 Querying local neural LLM (Ollama) to generate full CounterStrikeSharp plugin code...")
+		if aiCode, err := a.queryOllamaForCSharp(className, graphBytes, baseAstCode); err == nil && isValidCounterStrikeSharp(aiCode) && len(aiCode) > len(baseAstCode)/2 {
+			result.Logs = append(result.Logs, "[Agent AI] ✓ Local Neural LLM successfully generated production CounterStrikeSharp C# code!")
+			return aiCode
+		} else if err != nil {
+			result.Logs = append(result.Logs, fmt.Sprintf("[Agent AI] Neural LLM notice: %v (using AST engine)", err))
+		}
+	}
+
+	result.Logs = append(result.Logs, "[Agent AST Engine] ✓ AST Compiler compiled visual node connections and event triggers into CounterStrikeSharp C#")
+	return baseAstCode
 }
 
 func isValidCounterStrikeSharp(code string) bool {
@@ -971,7 +985,7 @@ func renderDefaultEventHandlers(className string) []string {
 	}
 }
 
-func (a *ClientAgent) queryOllamaForCSharp(className string, graphBytes []byte) (string, error) {
+func (a *ClientAgent) queryOllamaForCSharp(className string, graphBytes []byte, baseAstCode string) (string, error) {
 	llmURL := a.config.LocalLLMURL
 	if llmURL == "" {
 		llmURL = "http://127.0.0.1:11434"
@@ -1007,26 +1021,18 @@ func (a *ClientAgent) queryOllamaForCSharp(className string, graphBytes []byte) 
 	}
 
 	endpoint := strings.TrimRight(llmURL, "/") + "/api/generate"
-	prompt := fmt.Sprintf(`You are an expert CounterStrikeSharp (.NET 8) CS2 C# plugin developer.
-Generate clean, working, compilable CounterStrikeSharp C# code from this visual node graph AST JSON.
+	prompt := fmt.Sprintf(`You are an expert CounterStrikeSharp (.NET 8) CS2 C# plugin compiler.
+Below is the functional C# code structure generated from the visual node canvas for '%s':
 
-Class Name: %s
-Namespace: %s
-Node Graph JSON:
 %s
 
-MANDATORY RULES:
-1. Class MUST inherit from BasePlugin and have [MinimumApiVersion(250)].
-2. Implement exact CounterStrikeSharp event handlers:
-   - [GameEventHandler] public HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info) { var player = @event.Userid; ... return HookResult.Continue; }
-   - [GameEventHandler] public HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info) { ... return HookResult.Continue; }
-   - [GameEventHandler] public HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info) { ... return HookResult.Continue; }
-   - [GameEventHandler] public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info) { ... return HookResult.Continue; }
-   - [ConsoleCommand("cmdname")] public void OnCmd(CCSPlayerController? player, CommandInfo info) { ... }
-3. DO NOT invent fake classes (DO NOT create class Node, DO NOT use CCSPlayerIndex, DO NOT use HookEvent).
-4. Use valid CounterStrikeSharp types: CCSPlayerController, EventPlayerSpawn, EventPlayerDeath, ChatColors.
-5. In Load(bool hotReload), register handlers with RegisterEventHandler<...>(...).
-6. Output ONLY raw C# code starting with using statements. NO thinking tokens, NO markdown, NO backticks.`, className, className, string(graphBytes))
+YOUR TASK:
+Review and finalize this complete production CounterStrikeSharp plugin code.
+CRITICAL RULES:
+1. MUST inherit from BasePlugin and have [MinimumApiVersion(250)].
+2. Preserve and implement ALL logic inside event handlers (giving health/armor, weapons, HUD PrintToCenterHtml, PrintToChat, money, speed, commands). DO NOT replace handler bodies with empty stubs!
+3. Use exact CounterStrikeSharp types: CCSPlayerController, EventPlayerSpawn, EventPlayerDeath, EventPlayerConnectFull, EventRoundStart, ChatColors.
+4. Output ONLY clean, compilable C# source code starting with using statements. NO thinking tokens, NO markdown wrappers, NO backticks.`, className, baseAstCode)
 
 	reqBody := OllamaGenerateRequest{
 		Model:  modelName,
@@ -1067,6 +1073,10 @@ MANDATORY RULES:
 	// Auto-fix common LLM typos with CounterStrikeSharp API
 	cleaned = strings.ReplaceAll(cleaned, "GameEventPlayer", "EventPlayer")
 	cleaned = strings.ReplaceAll(cleaned, "GameEventRound", "EventRound")
+	cleaned = strings.ReplaceAll(cleaned, "EventType.PlayerSpawn", "EventPlayerSpawn")
+	cleaned = strings.ReplaceAll(cleaned, "EventType.PlayerDeath", "EventPlayerDeath")
+	cleaned = strings.ReplaceAll(cleaned, "EventType.PlayerConnectFull", "EventPlayerConnectFull")
+	cleaned = strings.ReplaceAll(cleaned, "EventType.RoundStart", "EventRoundStart")
 	cleaned = strings.ReplaceAll(cleaned, "RegisterCommand(", "AddCommand(")
 	cleaned = strings.ReplaceAll(cleaned, "using CounterStrikeSharp.API.Events;", "using CounterStrikeSharp.API.Core;")
 	cleaned = strings.ReplaceAll(cleaned, "using CounterStrikeSharp.API.Extensions;", "using CounterStrikeSharp.API.Core.Attributes;\nusing CounterStrikeSharp.API.Core.Attributes.Registration;")
