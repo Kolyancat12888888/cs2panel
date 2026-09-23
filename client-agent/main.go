@@ -800,6 +800,19 @@ MANDATORY RULES:
 	cleaned = strings.TrimPrefix(cleaned, "```cs")
 	cleaned = strings.TrimPrefix(cleaned, "```")
 	cleaned = strings.TrimSuffix(cleaned, "```")
+	cleaned = strings.TrimSpace(cleaned)
+
+	// Auto-fix common LLM typos with CounterStrikeSharp API
+	cleaned = strings.ReplaceAll(cleaned, "GameEventPlayer", "EventPlayer")
+	cleaned = strings.ReplaceAll(cleaned, "GameEventRound", "EventRound")
+	cleaned = strings.ReplaceAll(cleaned, "RegisterCommand(", "AddCommand(")
+	cleaned = strings.ReplaceAll(cleaned, "using CounterStrikeSharp.API.Events;", "using CounterStrikeSharp.API.Core;")
+	cleaned = strings.ReplaceAll(cleaned, "using CounterStrikeSharp.API.Extensions;", "using CounterStrikeSharp.API.Core.Attributes;\nusing CounterStrikeSharp.API.Core.Attributes.Registration;")
+
+	if !strings.Contains(cleaned, "CounterStrikeSharp.API.Core") {
+		cleaned = "using CounterStrikeSharp.API.Core;\nusing CounterStrikeSharp.API.Core.Attributes;\nusing CounterStrikeSharp.API.Core.Attributes.Registration;\nusing CounterStrikeSharp.API.Modules.Utils;\n" + cleaned
+	}
+
 	return strings.TrimSpace(cleaned), nil
 }
 
