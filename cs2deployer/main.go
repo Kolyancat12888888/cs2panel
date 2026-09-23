@@ -487,10 +487,13 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=%s
+ExecStartPre=-/bin/sh -c 'fuser -k -9 3002/tcp 8005/tcp 8888/tcp 2>/dev/null || true'
 ExecStart=%s
 Restart=always
-RestartSec=5s
+RestartSec=3s
 LimitNOFILE=65535
+KillMode=mixed
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -667,6 +670,15 @@ func runCmd(dir string, name string, args ...string) {
 	_ = cmd.Run()
 }
 
+func freePort(port string) {
+	if port == "" || runtime.GOOS == "windows" {
+		return
+	}
+	_ = exec.Command("fuser", "-k", "-9", port+"/tcp").Run()
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("lsof -t -i:%s 2>/dev/null | xargs -r kill -9 2>/dev/null", port))
+	_ = cmd.Run()
+}
+
 // ---------------- Process Management (Supervisor) ----------------
 
 func (pm *ProcessManager) StartAll(ctx context.Context) {
@@ -675,6 +687,17 @@ func (pm *ProcessManager) StartAll(ctx context.Context) {
 
 	pm.ctx, pm.cancel = context.WithCancel(ctx)
 	pm.running = true
+
+	log.Println("[DEPLOYER] Cleaning up any lingering ports (3002, 8005, 8888)...")
+	freePort(pm.config.BackendPort)
+	freePort(pm.config.FrontendPort)
+	freePort("8888")
+	if runtime.GOOS != "windows" {
+		_ = exec.Command("pkill", "-9", "-f", "artisan serve").Run()
+		_ = exec.Command("pkill", "-9", "-f", "next start").Run()
+		_ = exec.Command("pkill", "-9", "-f", "cs2daemon").Run()
+	}
+	time.Sleep(500 * time.Millisecond)
 
 	log.Println("[DEPLOYER] Starting CS2Panel Services (Backend + Frontend + Node Daemon)...")
 
@@ -716,6 +739,10 @@ func (pm *ProcessManager) StopAll() {
 		_ = killProcessTree(pm.daemonCmd.Process.Pid)
 		pm.daemonCmd = nil
 	}
+
+	freePort(pm.config.BackendPort)
+	freePort(pm.config.FrontendPort)
+	freePort("8888")
 }
 
 func (pm *ProcessManager) RestartAll(ctx context.Context) {
@@ -737,6 +764,8 @@ func (pm *ProcessManager) superviseDaemon(ctx context.Context) {
 			return
 		default:
 		}
+
+		freePort("8888")
 
 		var cmd *exec.Cmd
 		linuxBin := filepath.Join(daemonDir, "cs2daemon-linux-amd64")
@@ -804,6 +833,8 @@ func (pm *ProcessManager) superviseBackend(ctx context.Context) {
 		default:
 		}
 
+		freePort(pm.config.BackendPort)
+
 		log.Printf("[BACKEND] 🚀 Launching Laravel on http://0.0.0.0:%s ...", pm.config.BackendPort)
 		cmd := exec.Command("php", "artisan", "serve", "--host=0.0.0.0", "--port="+pm.config.BackendPort)
 		cmd.Dir = backendDir
@@ -845,6 +876,8 @@ func (pm *ProcessManager) superviseFrontend(ctx context.Context) {
 			return
 		default:
 		}
+
+		freePort(pm.config.FrontendPort)
 
 		log.Printf("[FRONTEND] 🚀 Launching Next.js on http://localhost:%s ...", pm.config.FrontendPort)
 
