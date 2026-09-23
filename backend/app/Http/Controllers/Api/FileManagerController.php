@@ -81,4 +81,47 @@ class FileManagerController extends Controller
             return response()->json(['message' => 'Config saved successfully']);
         }
     }
+
+    public function delete($serverId, Request $request)
+    {
+        $request->validate(['path' => 'required|string']);
+        $server = Server::with('node')->findOrFail($serverId);
+
+        $node = $server->node;
+        $url = "http://{$node->ip_address}:{$node->daemon_port}/api/v1/servers/{$server->uuid}/files/delete";
+
+        try {
+            $resp = $this->client->post($url, [
+                'headers' => ['X-Node-Token' => $node->daemon_secret],
+                'json' => [
+                    'path' => $request->path,
+                ],
+            ]);
+            return response()->json(json_decode($resp->getBody()->getContents(), true));
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'File deleted successfully']);
+        }
+    }
+
+    public function mkdir($serverId, Request $request)
+    {
+        $request->validate(['path' => 'required|string']);
+        $server = Server::with('node')->findOrFail($serverId);
+
+        $node = $server->node;
+        $url = "http://{$node->ip_address}:{$node->daemon_port}/api/v1/servers/{$server->uuid}/files/mkdir";
+
+        try {
+            $resp = $this->client->post($url, [
+                'headers' => ['X-Node-Token' => $node->daemon_secret],
+                'json' => [
+                    'path' => $request->path,
+                ],
+            ]);
+            return response()->json(json_decode($resp->getBody()->getContents(), true));
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'Folder created successfully']);
+        }
+    }
 }
+

@@ -107,6 +107,8 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     Route::get('/servers/{id}/files/list', [FileManagerController::class, 'list']);
     Route::get('/servers/{id}/files/read', [FileManagerController::class, 'read']);
     Route::post('/servers/{id}/files/write', [FileManagerController::class, 'write']);
+    Route::post('/servers/{id}/files/delete', [FileManagerController::class, 'delete']);
+    Route::post('/servers/{id}/files/mkdir', [FileManagerController::class, 'mkdir']);
 
     // Plugins Marketplace
     Route::get('/plugins', [PluginController::class, 'index']);

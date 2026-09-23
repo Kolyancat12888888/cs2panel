@@ -116,6 +116,8 @@ func (s *APIServer) setupRoutes() {
 		v1.GET("/servers/:uuid/files/list", auth, s.handleListFiles)
 		v1.POST("/servers/:uuid/files/write", auth, s.handleWriteFile)
 		v1.GET("/servers/:uuid/files/read", auth, s.handleReadFile)
+		v1.POST("/servers/:uuid/files/delete", auth, s.handleDeleteFile)
+		v1.POST("/servers/:uuid/files/mkdir", auth, s.handleMkdir)
 	}
 }
 
@@ -508,4 +510,53 @@ func (s *APIServer) handleReadFile(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"content": string(content)})
+}
+
+type DeleteFileReq struct {
+	Path string `json:"path" binding:"required"`
+}
+
+func (s *APIServer) handleDeleteFile(c *gin.Context) {
+	uuid := c.Param("uuid")
+	var req DeleteFileReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	cleanRel := filepath.Clean(req.Path)
+	if cleanRel == "." || cleanRel == "/" || cleanRel == "\\" || strings.HasPrefix(cleanRel, "..") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid path"})
+		return
+	}
+
+	fullPath := filepath.Join(s.symlinkEng.InstancePath(uuid), cleanRel)
+	if err := os.RemoveAll(fullPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "File or folder deleted successfully"})
+}
+
+type MkdirReq struct {
+	Path string `json:"path" binding:"required"`
+}
+
+func (s *APIServer) handleMkdir(c *gin.Context) {
+	uuid := c.Param("uuid")
+	var req MkdirReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	cleanRel := filepath.Clean(req.Path)
+	fullPath := filepath.Join(s.symlinkEng.InstancePath(uuid), cleanRel)
+	if err := os.MkdirAll(fullPath, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Folder created successfully"})
 }
