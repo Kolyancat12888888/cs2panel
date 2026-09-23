@@ -468,15 +468,29 @@ func (a *ClientAgent) processBuildJob(job *JobRequest) {
 
 	cmd := exec.Command("dotnet", "build", "-c", "Release", "-o", binDir)
 	cmd.Dir = projectDir
-	out, err := cmd.CombinedOutput()
+	out, _ := cmd.CombinedOutput()
 
 	dllBase64 := ""
 	dllPath := filepath.Join(binDir, cleanProjectName+".dll")
-	if dllBytes, readErr := os.ReadFile(dllPath); readErr == nil {
+	if dllBytes, readErr := os.ReadFile(dllPath); readErr == nil && len(dllBytes) > 0 {
 		dllBase64 = base64.StdEncoding.EncodeToString(dllBytes)
 		result.Logs = append(result.Logs, fmt.Sprintf("[Agent SDK] ✓ Binary DLL compilation succeeded: %s.dll (%d bytes)", cleanProjectName, len(dllBytes)))
-	} else if err != nil {
-		result.Logs = append(result.Logs, fmt.Sprintf("[Agent SDK] Build notice: %s", string(out)))
+	} else {
+		// If AI code failed to compile, fallback to deterministic AST compiler code
+		result.Logs = append(result.Logs, fmt.Sprintf("[Agent SDK] AI code build warning, falling back to AST compiler engine: %s", string(out)))
+		csharpSource = a.generateDeterministicCSharp(cleanProjectName, graphBytes)
+		_ = os.WriteFile(sourcePath, []byte(csharpSource), 0644)
+
+		fallbackCmd := exec.Command("dotnet", "build", "-c", "Release", "-o", binDir)
+		fallbackCmd.Dir = projectDir
+		fallbackOut, _ := fallbackCmd.CombinedOutput()
+
+		if fbDllBytes, fbReadErr := os.ReadFile(dllPath); fbReadErr == nil && len(fbDllBytes) > 0 {
+			dllBase64 = base64.StdEncoding.EncodeToString(fbDllBytes)
+			result.Logs = append(result.Logs, fmt.Sprintf("[Agent SDK] ✓ AST Engine DLL compilation succeeded: %s.dll (%d bytes)", cleanProjectName, len(fbDllBytes)))
+		} else {
+			result.Logs = append(result.Logs, fmt.Sprintf("[Agent SDK] Build log:\n%s", string(fallbackOut)))
+		}
 	}
 
 	result.Progress = 100
@@ -497,14 +511,33 @@ func (a *ClientAgent) processBuildJob(job *JobRequest) {
 func (a *ClientAgent) compileGraphToCSharp(className string, graphBytes []byte, result *JobResult) string {
 	// Try Local AI LLM (Ollama) first if configured
 	if a.config.LocalLLMURL != "" {
-		if aiCode, err := a.queryOllamaForCSharp(className, graphBytes); err == nil && len(aiCode) > 100 {
+		if aiCode, err := a.queryOllamaForCSharp(className, graphBytes); err == nil && isValidCounterStrikeSharp(aiCode) {
 			result.Logs = append(result.Logs, "[Agent AI] ✓ Local Neural LLM compiled Visual Node AST into CounterStrikeSharp C# code")
 			return aiCode
+		} else if err != nil {
+			result.Logs = append(result.Logs, fmt.Sprintf("[Agent AI] Neural LLM notice: %v (using AST compiler)", err))
 		}
 	}
 
 	result.Logs = append(result.Logs, "[Agent AST Engine] Compiling visual node connections and event triggers into CounterStrikeSharp C#...")
+	return a.generateDeterministicCSharp(className, graphBytes)
+}
 
+func isValidCounterStrikeSharp(code string) bool {
+	if len(code) < 150 {
+		return false
+	}
+	// Check for invalid hallucinated classes
+	if strings.Contains(code, "class Node") || strings.Contains(code, "new Node(") || strings.Contains(code, "CCSPlayerIndex") || strings.Contains(code, "HookEvent(") {
+		return false
+	}
+	if !strings.Contains(code, "BasePlugin") || !strings.Contains(code, "CounterStrikeSharp.API") {
+		return false
+	}
+	return true
+}
+
+func (a *ClientAgent) generateDeterministicCSharp(className string, graphBytes []byte) string {
 	var graph struct {
 		Nodes []struct {
 			ID         string                 `json:"id"`
@@ -708,21 +741,30 @@ func (a *ClientAgent) queryOllamaForCSharp(className string, graphBytes []byte) 
 	}
 
 	if modelName == "" {
-		modelName = "qwen2.5-coder:7b"
+		modelName = "qwen3-14b-tools:latest"
 	}
 
 	endpoint := strings.TrimRight(llmURL, "/") + "/api/generate"
-	prompt := fmt.Sprintf(`You are an expert CounterStrikeSharp (.NET 8) C# plugin developer.
-Generate clean, complete, production C# CounterStrikeSharp plugin code from this visual node graph AST JSON:
-Class / Namespace: %s
-Graph JSON:
+	prompt := fmt.Sprintf(`You are an expert CounterStrikeSharp (.NET 8) CS2 C# plugin developer.
+Generate clean, working, compilable CounterStrikeSharp C# code from this visual node graph AST JSON.
+
+Class Name: %s
+Namespace: %s
+Node Graph JSON:
 %s
 
 MANDATORY RULES:
-1. Inherit from BasePlugin and use [MinimumApiVersion(250)].
-2. Implement all event handlers, conditions, console commands, HUD notifications, and actions from the nodes.
-3. Use correct CounterStrikeSharp namespaces (CounterStrikeSharp.API, CounterStrikeSharp.API.Core, CounterStrikeSharp.API.Modules.Utils, CounterStrikeSharp.API.Modules.Commands, etc.).
-4. Return ONLY valid C# source code without markdown wrappers, backticks, or conversational text.`, className, string(graphBytes))
+1. Class MUST inherit from BasePlugin and have [MinimumApiVersion(250)].
+2. Implement exact CounterStrikeSharp event handlers:
+   - [GameEventHandler] public HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info) { var player = @event.Userid; ... return HookResult.Continue; }
+   - [GameEventHandler] public HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info) { ... return HookResult.Continue; }
+   - [GameEventHandler] public HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info) { ... return HookResult.Continue; }
+   - [GameEventHandler] public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info) { ... return HookResult.Continue; }
+   - [ConsoleCommand("cmdname")] public void OnCmd(CCSPlayerController? player, CommandInfo info) { ... }
+3. DO NOT invent fake classes (DO NOT create class Node, DO NOT use CCSPlayerIndex, DO NOT use HookEvent).
+4. Use valid CounterStrikeSharp types: CCSPlayerController, EventPlayerSpawn, EventPlayerDeath, ChatColors.
+5. In Load(bool hotReload), register handlers with RegisterEventHandler<...>(...).
+6. Output ONLY raw C# code starting with using statements. NO thinking tokens, NO markdown, NO backticks.`, className, className, string(graphBytes))
 
 	reqBody := OllamaGenerateRequest{
 		Model:  modelName,
@@ -748,6 +790,12 @@ MANDATORY RULES:
 	}
 
 	cleaned := strings.TrimSpace(ollamaResp.Response)
+
+	// Remove Qwen / DeepSeek think tags
+	if idx := strings.LastIndex(cleaned, "</think>"); idx != -1 {
+		cleaned = strings.TrimSpace(cleaned[idx+len("</think>"):])
+	}
+
 	cleaned = strings.TrimPrefix(cleaned, "```csharp")
 	cleaned = strings.TrimPrefix(cleaned, "```cs")
 	cleaned = strings.TrimPrefix(cleaned, "```")
