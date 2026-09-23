@@ -229,22 +229,22 @@ func checkAndApplyUpdate(pm *ProcessManager, cfg *Config, force bool) (bool, err
 	}
 
 	if release == nil {
-		return false, fmt.Errorf("no release found on GitHub repo %s", cfg.GitHubRepo)
+		return false, nil
 	}
-
-	log.Printf("[DEPLOYER] Latest GitHub release: %s (%s)", release.TagName, release.Name)
 
 	if !force && currentVer != "" && (currentVer == release.TagName || strings.TrimPrefix(currentVer, "v") == strings.TrimPrefix(release.TagName, "v")) {
 		return false, nil // Already up to date
 	}
 
-	log.Printf("[DEPLOYER] 🚀 Installing update %s -> %s...", currentVer, release.TagName)
+	log.Printf("[DEPLOYER] 🚀 New release detected: %s -> %s. Starting auto-update...", currentVer, release.TagName)
 
-	// Stop running child processes before replacing files to release locks
+	// Stop running child processes before replacing files to release locks and ports
 	if pm != nil {
-		log.Println("[DEPLOYER] Stopping supervised services for clean update...")
+		log.Println("[DEPLOYER] 🛑 Stopping supervised services and clearing ports (3002, 8005, 8888)...")
 		pm.StopAll()
-		time.Sleep(1 * time.Second)
+		waitForPortFree(cfg.BackendPort, 5*time.Second)
+		waitForPortFree(cfg.FrontendPort, 5*time.Second)
+		waitForPortFree("8888", 5*time.Second)
 	}
 
 	// Find the zip asset
@@ -256,7 +256,6 @@ func checkAndApplyUpdate(pm *ProcessManager, cfg *Config, force bool) (bool, err
 		}
 	}
 	if zipAsset == nil && len(release.Assets) > 0 {
-		// Fallback to first zip asset
 		for i, asset := range release.Assets {
 			if strings.HasSuffix(asset.Name, ".zip") {
 				zipAsset = &release.Assets[i]
@@ -269,24 +268,24 @@ func checkAndApplyUpdate(pm *ProcessManager, cfg *Config, force bool) (bool, err
 		return false, fmt.Errorf("no suitable .zip release asset found in release %s", release.TagName)
 	}
 
-	// 1. Backup critical files before unpack
+	// 1. Backup critical files before unpack (.env, database.sqlite, .env.local)
 	backupCriticalFiles(cfg)
 
 	// 2. Download release zip
 	tempZip := filepath.Join(os.TempDir(), fmt.Sprintf("cs2panel_%s.zip", release.TagName))
-	log.Printf("[DEPLOYER] Downloading %s (%d MB)...", zipAsset.Name, zipAsset.Size/1024/1024)
+	log.Printf("[DEPLOYER] Downloading release asset %s (%d MB)...", zipAsset.Name, zipAsset.Size/1024/1024)
 	if err := downloadFile(zipAsset.BrowserDownloadURL, tempZip); err != nil {
 		return false, fmt.Errorf("download failed: %w", err)
 	}
 	defer os.Remove(tempZip)
 
 	// 3. Extract release zip
-	log.Printf("[DEPLOYER] Extracting archive to %s...", cfg.TargetDir)
+	log.Printf("[DEPLOYER] Extracting archive into %s...", cfg.TargetDir)
 	if err := unzipArchive(tempZip, cfg.TargetDir); err != nil {
 		return false, fmt.Errorf("extraction failed: %w", err)
 	}
 
-	// 4. Restore critical files
+	// 4. Restore critical files (.env, database.sqlite)
 	restoreCriticalFiles(cfg)
 
 	// 5. Update standalone daemon binary if available in release assets
@@ -304,8 +303,8 @@ func checkAndApplyUpdate(pm *ProcessManager, cfg *Config, force bool) (bool, err
 		}
 	}
 
-	// 6. Run post-update migrations and optimizations
-	runPostUpdateHooks(cfg)
+	// 6. Run post-update migrations, npm install & build, optimize
+	runPostUpdateHooks(cfg, true)
 
 	// 7. Save new version
 	setLocalVersion(cfg.TargetDir, release.TagName)
@@ -575,7 +574,7 @@ func copyFile(src, dst string) {
 	_, _ = io.Copy(out, in)
 }
 
-func runPostUpdateHooks(cfg *Config) {
+func runPostUpdateHooks(cfg *Config, forceRebuild bool) {
 	log.Println("[DEPLOYER] Running post-update maintenance hooks...")
 
 	if _, err := os.Stat(cfg.BackendDir); err == nil {
@@ -596,7 +595,7 @@ func runPostUpdateHooks(cfg *Config) {
 		}
 
 		nextDir := filepath.Join(cfg.FrontendDir, ".next")
-		if _, err := os.Stat(nextDir); os.IsNotExist(err) {
+		if forceRebuild || fileNotExists(nextDir) {
 			log.Println("[DEPLOYER] Building Next.js production frontend assets...")
 			if runtime.GOOS == "windows" {
 				runCmd(cfg.FrontendDir, "cmd", "/c", "npm", "run", "build")
@@ -608,6 +607,11 @@ func runPostUpdateHooks(cfg *Config) {
 
 	// Sync and reload Nginx configuration
 	updateNginxConfig(cfg)
+}
+
+func fileNotExists(path string) bool {
+	_, err := os.Stat(path)
+	return os.IsNotExist(err)
 }
 
 func updateNginxConfig(cfg *Config) {
@@ -675,8 +679,23 @@ func freePort(port string) {
 		return
 	}
 	_ = exec.Command("fuser", "-k", "-9", port+"/tcp").Run()
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("lsof -t -i:%s 2>/dev/null | xargs -r kill -9 2>/dev/null", port))
-	_ = cmd.Run()
+	_ = exec.Command("sh", "-c", fmt.Sprintf("lsof -t -i:%s 2>/dev/null | xargs -r kill -9 2>/dev/null", port)).Run()
+	_ = exec.Command("sh", "-c", fmt.Sprintf("ss -lptn 'sport = :%s' 2>/dev/null | grep -oP 'pid=\\K[0-9]+' | xargs -r kill -9 2>/dev/null", port)).Run()
+}
+
+func waitForPortFree(port string, timeout time.Duration) {
+	if port == "" || runtime.GOOS == "windows" {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		freePort(port)
+		out, _ := exec.Command("sh", "-c", fmt.Sprintf("lsof -t -i:%s 2>/dev/null", port)).Output()
+		if len(strings.TrimSpace(string(out))) == 0 {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // ---------------- Process Management (Supervisor) ----------------
@@ -688,10 +707,10 @@ func (pm *ProcessManager) StartAll(ctx context.Context) {
 	pm.ctx, pm.cancel = context.WithCancel(ctx)
 	pm.running = true
 
-	log.Println("[DEPLOYER] Cleaning up any lingering ports (3002, 8005, 8888)...")
-	freePort(pm.config.BackendPort)
-	freePort(pm.config.FrontendPort)
-	freePort("8888")
+	log.Println("[DEPLOYER] Ensuring ports (3002, 8005, 8888) are 100% free before starting services...")
+	waitForPortFree(pm.config.BackendPort, 3*time.Second)
+	waitForPortFree(pm.config.FrontendPort, 3*time.Second)
+	waitForPortFree("8888", 3*time.Second)
 	if runtime.GOOS != "windows" {
 		_ = exec.Command("pkill", "-9", "-f", "artisan serve").Run()
 		_ = exec.Command("pkill", "-9", "-f", "next start").Run()
@@ -699,7 +718,7 @@ func (pm *ProcessManager) StartAll(ctx context.Context) {
 	}
 	time.Sleep(500 * time.Millisecond)
 
-	log.Println("[DEPLOYER] Starting CS2Panel Services (Backend + Frontend + Node Daemon)...")
+	log.Println("[DEPLOYER] 🚀 Launching CS2Panel Services (Backend + Frontend + Node Daemon)...")
 
 	// 1. Start Backend (Laravel)
 	go pm.superviseBackend(pm.ctx)
@@ -724,25 +743,31 @@ func (pm *ProcessManager) StopAll() {
 
 	if pm.backendCmd != nil && pm.backendCmd.Process != nil {
 		log.Println("[DEPLOYER] Stopping Backend process...")
-		_ = killProcessTree(pm.backendCmd.Process.Pid)
+		_ = killProcessTree(pm.backendCmd)
 		pm.backendCmd = nil
 	}
 
 	if pm.frontendCmd != nil && pm.frontendCmd.Process != nil {
 		log.Println("[DEPLOYER] Stopping Frontend process...")
-		_ = killProcessTree(pm.frontendCmd.Process.Pid)
+		_ = killProcessTree(pm.frontendCmd)
 		pm.frontendCmd = nil
 	}
 
 	if pm.daemonCmd != nil && pm.daemonCmd.Process != nil {
 		log.Println("[DEPLOYER] Stopping Node Daemon process...")
-		_ = killProcessTree(pm.daemonCmd.Process.Pid)
+		_ = killProcessTree(pm.daemonCmd)
 		pm.daemonCmd = nil
 	}
 
-	freePort(pm.config.BackendPort)
-	freePort(pm.config.FrontendPort)
-	freePort("8888")
+	if runtime.GOOS != "windows" {
+		_ = exec.Command("pkill", "-9", "-f", "artisan serve").Run()
+		_ = exec.Command("pkill", "-9", "-f", "next start").Run()
+		_ = exec.Command("pkill", "-9", "-f", "cs2daemon").Run()
+	}
+
+	waitForPortFree(pm.config.BackendPort, 3*time.Second)
+	waitForPortFree(pm.config.FrontendPort, 3*time.Second)
+	waitForPortFree("8888", 3*time.Second)
 }
 
 func (pm *ProcessManager) RestartAll(ctx context.Context) {
@@ -765,7 +790,7 @@ func (pm *ProcessManager) superviseDaemon(ctx context.Context) {
 		default:
 		}
 
-		freePort("8888")
+		waitForPortFree("8888", 2*time.Second)
 
 		var cmd *exec.Cmd
 		linuxBin := filepath.Join(daemonDir, "cs2daemon-linux-amd64")
@@ -785,6 +810,7 @@ func (pm *ProcessManager) superviseDaemon(ctx context.Context) {
 		}
 
 		cmd.Dir = daemonDir
+		setProcessGroup(cmd)
 
 		pm.mu.Lock()
 		pm.daemonCmd = cmd
@@ -833,11 +859,12 @@ func (pm *ProcessManager) superviseBackend(ctx context.Context) {
 		default:
 		}
 
-		freePort(pm.config.BackendPort)
+		waitForPortFree(pm.config.BackendPort, 2*time.Second)
 
 		log.Printf("[BACKEND] 🚀 Launching Laravel on http://0.0.0.0:%s ...", pm.config.BackendPort)
 		cmd := exec.Command("php", "artisan", "serve", "--host=0.0.0.0", "--port="+pm.config.BackendPort)
 		cmd.Dir = backendDir
+		setProcessGroup(cmd)
 
 		pm.mu.Lock()
 		pm.backendCmd = cmd
@@ -877,7 +904,7 @@ func (pm *ProcessManager) superviseFrontend(ctx context.Context) {
 		default:
 		}
 
-		freePort(pm.config.FrontendPort)
+		waitForPortFree(pm.config.FrontendPort, 2*time.Second)
 
 		log.Printf("[FRONTEND] 🚀 Launching Next.js on http://localhost:%s ...", pm.config.FrontendPort)
 
@@ -888,6 +915,7 @@ func (pm *ProcessManager) superviseFrontend(ctx context.Context) {
 			cmd = exec.Command("npm", "run", "start")
 		}
 		cmd.Dir = frontendDir
+		setProcessGroup(cmd)
 
 		pm.mu.Lock()
 		pm.frontendCmd = cmd
@@ -933,16 +961,4 @@ func streamOutput(cmd *exec.Cmd, prefix string) {
 			}
 		}()
 	}
-}
-
-func killProcessTree(pid int) error {
-	if runtime.GOOS == "windows" {
-		cmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", pid))
-		return cmd.Run()
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	return proc.Signal(syscall.SIGKILL)
 }
