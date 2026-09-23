@@ -20,7 +20,9 @@ import {
   Users,
   ShieldCheck,
   ShieldAlert,
-  Sliders
+  Sliders,
+  Sparkles,
+  Layers
 } from 'lucide-react';
 import { useAuth } from '@/lib/AuthContext';
 
@@ -32,10 +34,12 @@ export default function Sidebar() {
   const navItems = [
     { label: 'Overview', href: '/', icon: LayoutDashboard, permission: 'dashboard.view' },
     { label: 'Game Servers', href: '/servers', icon: Server, permission: 'servers.view' },
+    { label: '1-Click Server Packs', href: '/servers/packs', icon: Sparkles, badge: 'NEW', permission: 'servers.create' },
     { label: 'Visual Plugin Studio', href: '/studio', icon: Code2, badge: 'PRO', permission: 'studio.view' },
-    { label: 'Client AI Agents', href: '/agents', icon: Bot, badge: 'Local SDK', permission: 'agents.view' },
+    { label: 'AI Copilot & Chat', href: '/agents/copilot', icon: Bot, badge: 'AI', permission: 'studio.view' },
+    { label: 'Client AI Agents', href: '/agents', icon: Cpu, badge: 'Local SDK', permission: 'agents.view' },
     { label: 'Match & Tournaments', href: '/matches', icon: Trophy, permission: 'matches.view' },
-    { label: 'Node Cluster', href: '/nodes', icon: Cpu, permission: 'nodes.view' },
+    { label: 'Node Cluster', href: '/nodes', icon: Layers, permission: 'nodes.view' },
     { label: 'Marketplace', href: '/plugins', icon: ShoppingBag, permission: 'plugins.view' },
     { label: 'Support Tickets', href: '/tickets', icon: LifeBuoy, permission: 'dashboard.view' },
     { label: 'Audit Logs', href: '/audit', icon: FileText, permission: 'activity.view' },

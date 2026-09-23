@@ -41,8 +41,10 @@ export default function ServerHeader({ server, onRefresh }: ServerHeaderProps) {
 
   const tabs = [
     { label: 'Overview', href: `/servers/${server.id}`, icon: Activity },
+    { label: 'AI Crash Doctor', href: `/servers/${server.id}/doctor`, icon: Wrench },
     { label: 'Console', href: `/servers/${server.id}/console`, icon: Terminal },
     { label: 'Files & Configs', href: `/servers/${server.id}/files`, icon: FolderTree },
+    { label: 'FastDL (.bz2)', href: `/servers/${server.id}/fastdl`, icon: HardDrive },
     { label: 'Cvar Settings', href: `/servers/${server.id}/config`, icon: Sliders },
     { label: 'Plugins & Mods', href: `/servers/${server.id}/plugins`, icon: Package },
     { label: 'Workshop Maps', href: `/servers/${server.id}/workshop`, icon: Map },

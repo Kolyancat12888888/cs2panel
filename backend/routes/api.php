@@ -24,6 +24,10 @@ use App\Http\Controllers\Api\MatchManagerController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\SystemSettingsController;
+use App\Http\Controllers\Api\AiCopilotController;
+use App\Http\Controllers\Api\CrashDoctorController;
+use App\Http\Controllers\Api\ServerPackController;
+use App\Http\Controllers\Api\FastDlController;
 
 /*
 |--------------------------------------------------------------------------
@@ -229,6 +233,25 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     Route::post('/tickets', [TicketController::class, 'store']);
     Route::get('/tickets/{id}', [TicketController::class, 'show']);
     Route::post('/tickets/{id}/reply', [TicketController::class, 'reply']);
+
+    // ─── AI COPILOT & SWARM INTELLIGENCE ───
+    Route::get('/copilot/models', [AiCopilotController::class, 'models']);
+    Route::post('/copilot/chat', [AiCopilotController::class, 'chat']);
+    Route::post('/copilot/analyze-log', [AiCopilotController::class, 'analyzeLog']);
+
+    // ─── AI CRASH DOCTOR & LIVE SENTINEL ───
+    Route::get('/servers/{id}/doctor/status', [CrashDoctorController::class, 'status']);
+    Route::post('/servers/{id}/doctor/resolve', [CrashDoctorController::class, 'resolveIncident']);
+
+    // ─── 1-CLICK SERVER PACKS ───
+    Route::get('/server-packs', [ServerPackController::class, 'index']);
+    Route::middleware('permission:servers.create')->group(function () {
+        Route::post('/server-packs/deploy', [ServerPackController::class, 'deploy']);
+    });
+
+    // ─── FASTDL HTTP ENGINE ───
+    Route::get('/servers/{id}/fastdl/assets', [FastDlController::class, 'assets']);
+    Route::post('/servers/{id}/fastdl/rebuild', [FastDlController::class, 'rebuild']);
 
     // ─── AUDIT & ACTIVITY LOGS ───
     Route::middleware('permission:activity.view')->group(function () {

@@ -62,15 +62,20 @@ type RegisterRequest struct {
 	OS           string                 `json:"os"`
 	Arch         string                 `json:"arch"`
 	Capabilities map[string]interface{} `json:"capabilities"`
+	GPU          GpuTelemetry           `json:"gpu"`
+	OllamaModels []string               `json:"ollama_models"`
 }
 
 type HeartbeatRequest struct {
 	AgentID      string                 `json:"agent_id"`
-	Status       string                 `json:"status"`
+	Status       string                 `json:"status"` // ready, busy, throttled
 	CPUUsage     float64                `json:"cpu_usage"`
 	RAMUsageMB   uint64                 `json:"ram_usage_mb"`
+	RAMTotalMB   uint64                 `json:"ram_total_mb"`
 	ActiveJobID  string                 `json:"active_job_id,omitempty"`
 	Capabilities map[string]interface{} `json:"capabilities"`
+	GPU          GpuTelemetry           `json:"gpu"`
+	OllamaModels []string               `json:"ollama_models"`
 }
 
 type HeartbeatResponse struct {
@@ -232,6 +237,14 @@ func (a *ClientAgent) registerWithPlatform() {
 		caps[k] = v
 	}
 
+	gpuInfo := detectGpuTelemetry()
+	modelsList := []string{}
+	if models, err := a.listOllamaModels(); err == nil {
+		for _, m := range models {
+			modelsList = append(modelsList, m.Name)
+		}
+	}
+
 	payload := RegisterRequest{
 		AgentID:      a.config.AgentID,
 		DeviceID:     a.config.DeviceID,
@@ -240,6 +253,8 @@ func (a *ClientAgent) registerWithPlatform() {
 		OS:           runtime.GOOS,
 		Arch:         runtime.GOARCH,
 		Capabilities: caps,
+		GPU:          gpuInfo,
+		OllamaModels: modelsList,
 	}
 
 	bodyBytes, _ := json.Marshal(payload)
@@ -258,7 +273,7 @@ func (a *ClientAgent) registerWithPlatform() {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
-		log.Printf("[CS2 AI Client] ✓ Successfully registered with CS2Panel Central Gateway! Agent is ONLINE.")
+		log.Printf("[CS2 AI Client] ✓ Registered with Swarm Gateway! Agent is ONLINE (GPU: %s, VRAM: %d MB free).", gpuInfo.Model, gpuInfo.VRAMFreeMB)
 	}
 }
 
@@ -273,13 +288,22 @@ func (a *ClientAgent) sendHeartbeat() {
 
 	vMem, _ := mem.VirtualMemory()
 	usedRamMB := uint64(0)
+	totalRamMB := uint64(0)
 	if vMem != nil {
 		usedRamMB = vMem.Used / 1024 / 1024
+		totalRamMB = vMem.Total / 1024 / 1024
 	}
+
+	gpuInfo := detectGpuTelemetry()
 
 	status := "ready"
 	if a.activeJob != "" {
 		status = "busy"
+	}
+
+	// Autonomous Power Governor
+	if cpuUsage > 85.0 || (gpuInfo.HasGPU && gpuInfo.GpuUtilizationPct > 90.0) {
+		status = "throttled"
 	}
 
 	caps := make(map[string]interface{})
@@ -287,13 +311,23 @@ func (a *ClientAgent) sendHeartbeat() {
 		caps[k] = v
 	}
 
+	modelsList := []string{}
+	if models, err := a.listOllamaModels(); err == nil {
+		for _, m := range models {
+			modelsList = append(modelsList, m.Name)
+		}
+	}
+
 	hb := HeartbeatRequest{
 		AgentID:      a.config.AgentID,
 		Status:       status,
 		CPUUsage:     cpuUsage,
 		RAMUsageMB:   usedRamMB,
+		RAMTotalMB:   totalRamMB,
 		ActiveJobID:  a.activeJob,
 		Capabilities: caps,
+		GPU:          gpuInfo,
+		OllamaModels: modelsList,
 	}
 
 	bodyBytes, _ := json.Marshal(hb)
@@ -326,9 +360,89 @@ func (a *ClientAgent) sendHeartbeat() {
 func (a *ClientAgent) routeJob(job *JobRequest) {
 	if job.Type == "plugin.ai_generate" || job.Type == "graph.ai_synthesize" {
 		a.processAiGenerateJob(job)
+	} else if job.Type == "ollama.model_pull" {
+		a.processOllamaPullJob(job)
+	} else if job.Type == "copilot.chat" {
+		a.processCopilotChatJob(job)
 	} else {
 		a.processBuildJob(job)
 	}
+}
+
+func (a *ClientAgent) processOllamaPullJob(job *JobRequest) {
+	modelName := job.GetPrompt()
+	if modelName == "" {
+		modelName = "qwen3-14b-tools:latest"
+	}
+	log.Printf("[CS2 AI Swarm] Pulling Ollama Model on-demand: '%s'...", modelName)
+	a.activeJob = job.UUID
+	defer func() { a.activeJob = "" }()
+
+	err := a.pullOllamaModel(modelName, func(percent float64, status string) {
+		log.Printf("[CS2 AI Swarm] Model '%s' download progress: %.1f%% (%s)", modelName, percent, status)
+	})
+
+	status := "success"
+	msg := fmt.Sprintf("Model '%s' successfully pulled onto agent node.", modelName)
+	if err != nil {
+		status = "failed"
+		msg = fmt.Sprintf("Failed pulling model '%s': %v", modelName, err)
+	}
+
+	a.sendJobResult(JobResult{
+		JobID:      job.UUID,
+		AgentID:    a.config.AgentID,
+		Status:     status,
+		Progress:   100,
+		Logs:       []string{msg},
+		FinishedAt: time.Now().Format(time.RFC3339),
+	})
+}
+
+func (a *ClientAgent) processCopilotChatJob(job *JobRequest) {
+	a.activeJob = job.UUID
+	defer func() { a.activeJob = "" }()
+
+	prompt := job.GetPrompt()
+	llmURL := a.config.LocalLLMURL
+	if llmURL == "" {
+		llmURL = "http://127.0.0.1:11434"
+	}
+	model := a.config.LLMModel
+	if model == "" {
+		model = "qwen3-14b-tools:latest"
+	}
+
+	endpoint := strings.TrimRight(llmURL, "/") + "/api/generate"
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"model":  model,
+		"prompt": prompt,
+		"stream": false,
+		"options": map[string]interface{}{
+			"temperature": 0.55,
+		},
+	})
+
+	client := &http.Client{Timeout: 300 * time.Second}
+	resp, err := client.Post(endpoint, "application/json", bytes.NewBuffer(reqBody))
+	var responseText string
+	if err == nil {
+		defer resp.Body.Close()
+		var ollamaResp OllamaGenerateResponse
+		_ = json.NewDecoder(resp.Body).Decode(&ollamaResp)
+		responseText = ollamaResp.Response
+	} else {
+		responseText = fmt.Sprintf("AI Generation Error: %v", err)
+	}
+
+	a.sendJobResult(JobResult{
+		JobID:      job.UUID,
+		AgentID:    a.config.AgentID,
+		Status:     "success",
+		Progress:   100,
+		Logs:       []string{responseText},
+		FinishedAt: time.Now().Format(time.RFC3339),
+	})
 }
 
 // Background AI Node Generator running on Local Agent
@@ -1325,12 +1439,31 @@ func (a *ClientAgent) sendJobResult(res JobResult) {
 
 func main() {
 	configPathFlag := flag.String("config", "", "Path to agent_config.json")
+	installServiceFlag := flag.Bool("install-service", false, "Register agent in Windows Task Scheduler / systemd autostart service")
+	uninstallServiceFlag := flag.Bool("uninstall-service", false, "Unregister agent autostart service")
+	headlessFlag := flag.Bool("headless", false, "Run in silent background daemon mode")
 	flag.Parse()
 
-	log.Println("==========================================================")
-	log.Println("           CS2 AI Client & Plugin Studio Agent            ")
-	log.Println("    Local AI • Node Graph Compiler • .NET 8 Build Engine  ")
-	log.Println("==========================================================")
+	if *installServiceFlag {
+		if err := installService(); err != nil {
+			log.Fatalf("[SERVICE ERROR] %v", err)
+		}
+		os.Exit(0)
+	}
+
+	if *uninstallServiceFlag {
+		if err := uninstallService(); err != nil {
+			log.Fatalf("[SERVICE ERROR] %v", err)
+		}
+		os.Exit(0)
+	}
+
+	if !*headlessFlag {
+		log.Println("==========================================================")
+		log.Println("     CS2Panel AI Swarm Agent & Autonomous Compute Node    ")
+		log.Println("  Decentralized Mesh • .NET 8 SDK • Ollama GPU Engine     ")
+		log.Println("==========================================================")
+	}
 
 	homeDir, _ := os.UserHomeDir()
 	configPath := *configPathFlag
@@ -1342,7 +1475,9 @@ func main() {
 	fileData, err := os.ReadFile(configPath)
 	if err == nil {
 		_ = json.Unmarshal(fileData, cfg)
-		log.Printf("[CS2 AI Client] Loaded config from %s", configPath)
+		if !*headlessFlag {
+			log.Printf("[CS2 AI Client] Loaded config from %s", configPath)
+		}
 	} else {
 		log.Printf("[CS2 AI Client] Notice: Config file not found at %s, using defaults", configPath)
 		cfg.AgentID = "agent_" + fmt.Sprintf("%x", time.Now().UnixNano())[:16]
