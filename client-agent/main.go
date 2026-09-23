@@ -38,11 +38,12 @@ type AgentConfig struct {
 }
 
 type OllamaGenerateRequest struct {
-	Model   string `json:"model"`
-	Prompt  string `json:"prompt"`
-	System  string `json:"system,omitempty"`
-	Format  string `json:"format,omitempty"`
-	Stream  bool   `json:"stream"`
+	Model   string                 `json:"model"`
+	Prompt  string                 `json:"prompt"`
+	System  string                 `json:"system,omitempty"`
+	Format  string                 `json:"format,omitempty"`
+	Stream  bool                   `json:"stream"`
+	Options map[string]interface{} `json:"options,omitempty"`
 }
 
 type OllamaGenerateResponse struct {
@@ -1021,23 +1022,42 @@ func (a *ClientAgent) queryOllamaForCSharp(className string, graphBytes []byte, 
 	}
 
 	endpoint := strings.TrimRight(llmURL, "/") + "/api/generate"
-	prompt := fmt.Sprintf(`You are an expert CounterStrikeSharp (.NET 8) CS2 C# plugin compiler.
-Below is the functional C# code structure generated from the visual node canvas for '%s':
+	prompt := fmt.Sprintf(`You are a Lead CounterStrikeSharp (.NET 8) CS2 Plugin Engine Architect.
+Your task is to take this baseline node graph logic and architect a complete, rich, highly-detailed production C# CounterStrikeSharp plugin for CS2.
 
+Plugin Name: %s
+Namespace: %s
+Canvas Node Logic Skeleton:
 %s
 
-YOUR TASK:
-Review and finalize this complete production CounterStrikeSharp plugin code.
-CRITICAL RULES:
-1. MUST inherit from BasePlugin and have [MinimumApiVersion(250)].
-2. Preserve and implement ALL logic inside event handlers (giving health/armor, weapons, HUD PrintToCenterHtml, PrintToChat, money, speed, commands). DO NOT replace handler bodies with empty stubs!
-3. Use exact CounterStrikeSharp types: CCSPlayerController, EventPlayerSpawn, EventPlayerDeath, EventPlayerConnectFull, EventRoundStart, ChatColors.
-4. Output ONLY clean, compilable C# source code starting with using statements. NO thinking tokens, NO markdown wrappers, NO backticks.`, className, baseAstCode)
+MANDATORY EXPANSION GUIDELINES (Target 500-1000+ lines of robust, complete logic):
+1. Plugin Architecture:
+   - Inherit from BasePlugin and use [MinimumApiVersion(250)].
+   - Implement IPluginConfig configuration class with customizable values (health amounts, armor, message prefixes, VIP flags).
+2. Deep Gameplay Systems:
+   - In-memory Player State Manager (track player session stats, killstreaks, VIP status, bonuses).
+   - Combat Mechanics: Expanded headshot detection, killstreak multipliers, dynamic health/armor regeneration with limit clamping, weapon loadouts.
+   - Interactive Commands: Implement !vip, !menu, !stats, !bonus with clean ChatColors formatting and permission checks via AdminManager.
+   - Audio-Visual Feedback: Rich PrintToCenterHtml stylized popups and PrintToChat broadcast notifications.
+   - Clean Lifecycle: Proper cleanup on EventPlayerDisconnect and round reset in EventRoundStart.
+3. Code Quality:
+   - Declare 'var pawn = player.PlayerPawn?.Value;' only once per handler.
+   - Full null-safety checks on player and pawn before all operations.
+4. Output Format:
+   - Output ONLY raw compilable C# source code starting with using statements.
+   - NO thinking tokens, NO <think> tags, NO markdown wrappers, NO conversational text.`, className, className, baseAstCode)
 
 	reqBody := OllamaGenerateRequest{
 		Model:  modelName,
 		Prompt: prompt,
 		Stream: false,
+		Options: map[string]interface{}{
+			"temperature":    0.55,
+			"top_p":          0.9,
+			"num_ctx":        16384,
+			"num_predict":    4096,
+			"repeat_penalty": 1.05,
+		},
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -1045,7 +1065,7 @@ CRITICAL RULES:
 		return "", err
 	}
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Post(endpoint, "application/json", bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return "", err
