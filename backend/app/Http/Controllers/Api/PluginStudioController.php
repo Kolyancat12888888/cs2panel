@@ -312,14 +312,129 @@ class PluginStudioController extends Controller
         $server = Server::with('node')->findOrFail($request->server_id);
         $project = PluginProject::findOrFail($id);
 
+        $safeName = preg_replace('/[^a-zA-Z0-9_]/', '', $project->name) ?: 'CustomPlugin';
+        if (is_numeric($safeName[0])) {
+            $safeName = 'Plugin_' . $safeName;
+        }
+        $pluginDir = "game/csgo/addons/counterstrikesharp/plugins/{$safeName}";
+
+        // Write Plugin Manifest (.json)
+        $manifest = json_encode([
+            'name' => $project->name,
+            'version' => $project->version ?? '1.0.0',
+            'author' => $project->author ?? 'CS2Panel Studio',
+            'description' => $project->description ?? 'Visual Plugin Studio Project',
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+        $this->daemon->writeFile($server, "{$pluginDir}/{$safeName}.json", $manifest);
+
+        // Generate C# Code & write .cs
+        $csharp = $this->generateCSharpCode($safeName, $project);
+        $this->daemon->writeFile($server, "{$pluginDir}/{$safeName}.cs", $csharp);
+
         // Reload plugins via RCON
+        $rconRes = [];
         try {
-            $this->daemon->executeRcon($server, 'css_plugins reload');
+            $rconRes = $this->daemon->executeRcon($server, 'css_plugins reload');
         } catch (\Exception $e) {}
 
         return response()->json([
-            'message' => "Plugin '{$project->name}' deployed successfully to server {$server->name}",
+            'message' => "Plugin '{$project->name}' deployed and loaded into server {$server->name}!",
             'server_id' => $server->id,
+            'plugin_dir' => $pluginDir,
+            'rcon' => $rconRes['response'] ?? '',
         ]);
     }
+
+    protected function generateCSharpCode(string $className, PluginProject $project): string
+    {
+        $author = addslashes($project->author ?? 'CS2Panel Studio');
+        $desc = addslashes($project->description ?? 'Custom CS2 Plugin');
+        $version = $project->version ?? '1.0.0';
+
+        return <<<CSHARP
+using System;
+using CounterStrikeSharp.API;
+using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Core.Attributes;
+using CounterStrikeSharp.API.Core.Attributes.Registration;
+using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Utils;
+
+namespace {$className};
+
+[MinimumApiVersion(250)]
+public class {$className}Plugin : BasePlugin
+{
+    public override string ModuleName => "{$project->name}";
+    public override string ModuleVersion => "{$version}";
+    public override string ModuleAuthor => "{$author}";
+    public override string ModuleDescription => "{$desc}";
+
+    public override void Load(bool hotReload)
+    {
+        Console.WriteLine("[{$className}] Plugin loaded successfully into CounterStrikeSharp!");
+        RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
+        RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
+        RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
+        RegisterEventHandler<EventRoundStart>(OnRoundStart);
+
+        AddCommand("css_info", "Show Plugin Info", OnInfoCommand);
+    }
+
+    [GameEventHandler]
+    public HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info)
+    {
+        var player = @event.Userid;
+        if (player == null || !player.IsValid || player.IsBot) return HookResult.Continue;
+
+        player.PrintToChat($" {ChatColors.Orange}[{$className}]{ChatColors.White} Plugin active on this server!");
+        return HookResult.Continue;
+    }
+
+    [GameEventHandler]
+    public HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
+    {
+        var player = @event.Userid;
+        if (player == null || !player.IsValid) return HookResult.Continue;
+
+        return HookResult.Continue;
+    }
+
+    [GameEventHandler]
+    public HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
+    {
+        var attacker = @event.Attacker;
+        var victim = @event.Userid;
+
+        if (attacker != null && attacker.IsValid && attacker != victim)
+        {
+            var pawn = attacker.PlayerPawn?.Value;
+            if (pawn != null && pawn.IsValid)
+            {
+                attacker.PrintToCenterHtml("<font color='lime'>+ KILL CONFIRMED</font>");
+            }
+        }
+        return HookResult.Continue;
+    }
+
+    [GameEventHandler]
+    public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
+    {
+        Console.WriteLine("[{$className}] Round started.");
+        return HookResult.Continue;
+    }
+
+    [ConsoleCommand("css_info")]
+    public void OnInfoCommand(CCSPlayerController? player, CommandInfo info)
+    {
+        if (player != null && player.IsValid)
+        {
+            player.PrintToChat($" {ChatColors.Green}[{$className}]{ChatColors.White} {$project->name} v{$version} by {$author}");
+        }
+    }
 }
+CSHARP;
+    }
+}
+

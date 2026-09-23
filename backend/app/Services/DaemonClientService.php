@@ -176,5 +176,25 @@ class DaemonClientService
             return ['error' => $e->getMessage()];
         }
     }
+
+    public function writeFile(Server $server, string $relPath, string $content): array
+    {
+        $node = $server->node;
+        $url = $this->getBaseUri($node) . "/servers/{$server->uuid}/files/write";
+
+        try {
+            $resp = $this->client->post($url, [
+                'headers' => ['X-Node-Token' => $node->daemon_secret],
+                'json' => [
+                    'path' => $relPath,
+                    'content' => $content,
+                ],
+            ]);
+            return json_decode($resp->getBody()->getContents(), true) ?? [];
+        } catch (\Exception $e) {
+            return ['error' => $e->getMessage()];
+        }
+    }
 }
+
 
