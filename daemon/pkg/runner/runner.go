@@ -254,10 +254,23 @@ func (s *ServerProcess) Kill() error {
 }
 
 func (s *ServerProcess) ExecuteRCON(cmd string) (string, error) {
-	if s.rconClient == nil {
-		return "", fmt.Errorf("rcon client not initialized")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 1. Direct interactive STDIN pipe (Native Source 2 dedicated console)
+	if s.stdin != nil {
+		_, err := fmt.Fprintln(s.stdin, cmd)
+		if err == nil {
+			return fmt.Sprintf("[RCON] Dispatched command: %s", cmd), nil
+		}
 	}
-	return s.rconClient.Execute(cmd)
+
+	// 2. Secondary fallback: TCP RCON
+	if s.rconClient != nil {
+		return s.rconClient.Execute(cmd)
+	}
+
+	return "", fmt.Errorf("server process is not running or stdin pipe closed")
 }
 
 func (s *ServerProcess) pipeLogs(r io.Reader) {
