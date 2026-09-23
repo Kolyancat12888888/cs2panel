@@ -509,16 +509,6 @@ func (a *ClientAgent) processBuildJob(job *JobRequest) {
 
 // Real Visual Node Graph -> CounterStrikeSharp C# Compiler Engine
 func (a *ClientAgent) compileGraphToCSharp(className string, graphBytes []byte, result *JobResult) string {
-	// Try Local AI LLM (Ollama) first if configured
-	if a.config.LocalLLMURL != "" {
-		if aiCode, err := a.queryOllamaForCSharp(className, graphBytes); err == nil && isValidCounterStrikeSharp(aiCode) {
-			result.Logs = append(result.Logs, "[Agent AI] ✓ Local Neural LLM compiled Visual Node AST into CounterStrikeSharp C# code")
-			return aiCode
-		} else if err != nil {
-			result.Logs = append(result.Logs, fmt.Sprintf("[Agent AI] Neural LLM notice: %v (using AST compiler)", err))
-		}
-	}
-
 	result.Logs = append(result.Logs, "[Agent AST Engine] Compiling visual node connections and event triggers into CounterStrikeSharp C#...")
 	return a.generateDeterministicCSharp(className, graphBytes)
 }
