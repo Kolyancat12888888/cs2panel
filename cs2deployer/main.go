@@ -75,6 +75,7 @@ func main() {
 	updateOnlyFlag := flag.Bool("update-only", false, "Check and download update, then exit")
 	forceUpdateFlag := flag.Bool("force-update", false, "Force download and reinstall latest release")
 	withDaemonFlag := flag.Bool("daemon", true, "Automatically run Node Daemon if daemon/ folder exists")
+	installServiceFlag := flag.Bool("install-service", false, "Install and start as background systemd service on Linux")
 	versionFlag := flag.Bool("version", false, "Print deployer version and exit")
 	flag.Parse()
 
@@ -111,6 +112,13 @@ func main() {
 		log.Printf("[DEPLOYER] Loaded configuration from %s", configFile)
 	}
 
+	if *installServiceFlag {
+		if err := installSystemdService(cfg); err != nil {
+			log.Fatalf("[SYSTEMD] Error installing service: %v", err)
+		}
+		return
+	}
+
 	log.Printf("[DEPLOYER] Target Directory: %s", cfg.TargetDir)
 	log.Printf("[DEPLOYER] Backend Directory: %s", cfg.BackendDir)
 	log.Printf("[DEPLOYER] Frontend Directory: %s", cfg.FrontendDir)
@@ -141,7 +149,7 @@ func main() {
 	// 1. Initial Update Check
 	if !*runOnlyFlag {
 		log.Println("[DEPLOYER] Checking for latest GitHub release...")
-		updated, err := checkAndApplyUpdate(cfg, *forceUpdateFlag)
+		updated, err := checkAndApplyUpdate(pm, cfg, *forceUpdateFlag)
 		if err != nil {
 			log.Printf("[DEPLOYER] Notice during update check: %v", err)
 		} else if updated {
@@ -169,7 +177,7 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				updated, err := checkAndApplyUpdate(cfg, false)
+				updated, err := checkAndApplyUpdate(pm, cfg, false)
 				if err != nil {
 					log.Printf("[DEPLOYER] Background update check error: %v", err)
 				} else if updated {
@@ -206,7 +214,7 @@ func setLocalVersion(targetDir string, version string) {
 	_ = os.WriteFile(versionFile, []byte(version+"\n"), 0644)
 }
 
-func checkAndApplyUpdate(cfg *Config, force bool) (bool, error) {
+func checkAndApplyUpdate(pm *ProcessManager, cfg *Config, force bool) (bool, error) {
 	currentVer := getLocalVersion(cfg.TargetDir)
 	log.Printf("[DEPLOYER] Current local version: %s", func() string {
 		if currentVer == "" {
@@ -231,6 +239,13 @@ func checkAndApplyUpdate(cfg *Config, force bool) (bool, error) {
 	}
 
 	log.Printf("[DEPLOYER] 🚀 Installing update %s -> %s...", currentVer, release.TagName)
+
+	// Stop running child processes before replacing files to release locks
+	if pm != nil {
+		log.Println("[DEPLOYER] Stopping supervised services for clean update...")
+		pm.StopAll()
+		time.Sleep(1 * time.Second)
+	}
 
 	// Find the zip asset
 	var zipAsset *GitHubReleaseAsset
@@ -356,14 +371,23 @@ func downloadFile(url string, dest string) error {
 		return fmt.Errorf("server returned HTTP %d", resp.StatusCode)
 	}
 
-	out, err := os.Create(dest)
+	tmpDest := dest + ".tmp"
+	_ = os.Remove(tmpDest)
+
+	out, err := os.Create(tmpDest)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
 	_, err = io.Copy(out, resp.Body)
-	return err
+	out.Close()
+	if err != nil {
+		_ = os.Remove(tmpDest)
+		return err
+	}
+
+	_ = os.Remove(dest)
+	return os.Rename(tmpDest, dest)
 }
 
 func unzipArchive(src, dest string) error {
@@ -397,9 +421,34 @@ func unzipArchive(src, dest string) error {
 			return err
 		}
 
+		// Unlink file first to avoid ETXTBSY (text file busy) on running executables
+		_ = os.Remove(fpath)
+
 		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
 		if err != nil {
-			return err
+			// Fallback: write to temp file and atomically rename
+			tmpPath := fpath + ".tmp"
+			_ = os.Remove(tmpPath)
+			outFile, err = os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+			if err != nil {
+				return err
+			}
+			rc, err := f.Open()
+			if err != nil {
+				outFile.Close()
+				return err
+			}
+			_, err = io.Copy(outFile, rc)
+			outFile.Close()
+			rc.Close()
+			if err != nil {
+				_ = os.Remove(tmpPath)
+				return err
+			}
+			_ = os.Remove(fpath)
+			_ = os.Rename(tmpPath, fpath)
+			count++
+			continue
 		}
 
 		rc, err := f.Open()
@@ -417,6 +466,47 @@ func unzipArchive(src, dest string) error {
 		count++
 	}
 	log.Printf("[DEPLOYER] Unpacked %d files into %s", count, destAbs)
+	return nil
+}
+
+func installSystemdService(cfg *Config) error {
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("systemd service installation is only supported on Linux")
+	}
+
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath = filepath.Join(cfg.TargetDir, "cs2deployer-linux-amd64")
+	}
+
+	serviceContent := fmt.Sprintf(`[Unit]
+Description=CS2Panel Server Auto-Deployer & Supervisor
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=%s
+ExecStart=%s
+Restart=always
+RestartSec=5s
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+`, cfg.TargetDir, execPath)
+
+	servicePath := "/etc/systemd/system/cs2panel.service"
+	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
+		return fmt.Errorf("failed to write %s: %w (are you running as root/sudo?)", servicePath, err)
+	}
+
+	log.Printf("[SYSTEMD] Written service file to %s", servicePath)
+	runCmd(cfg.TargetDir, "systemctl", "daemon-reload")
+	runCmd(cfg.TargetDir, "systemctl", "enable", "cs2panel")
+	runCmd(cfg.TargetDir, "systemctl", "restart", "cs2panel")
+	log.Printf("[SYSTEMD] ✓ CS2Panel service installed, enabled and started successfully!")
+	log.Printf("[SYSTEMD] Check live logs at any time with: journalctl -u cs2panel -f")
 	return nil
 }
 
