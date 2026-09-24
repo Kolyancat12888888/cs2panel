@@ -26,24 +26,42 @@ jobs:
           # Fetch all tags
           git fetch --tags
           
-          # Get highest tag or default to v1.0.0
+          # Get highest tag
           LATEST_TAG=$(git tag -l "v*" | sort -V | tail -n 1)
-          
-          if [ -z "$LATEST_TAG" ]; then
-            NEW_TAG="v1.0.0"
-          else
-            # Strip leading 'v'
-            VER="${LATEST_TAG#v}"
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$VER"
-            
-            # Default fallback if parsing fails
-            MAJOR=${MAJOR:-1}
-            MINOR=${MINOR:-0}
-            PATCH=${PATCH:-0}
-            
-            # Increment patch version
-            NEW_PATCH=$((PATCH + 1))
-            NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+          NEW_TAG=""
+
+          # 1. Check if explicit VERSION file is set and tag does not exist
+          if [ -f VERSION ]; then
+            SPECIFIED_VER=$(cat VERSION | tr -d '[:space:]')
+            if [ -n "$SPECIFIED_VER" ]; then
+              SPECIFIED_TAG="v${SPECIFIED_VER#v}"
+              if ! git tag -l "$SPECIFIED_TAG" | grep -q "^${SPECIFIED_TAG}$"; then
+                NEW_TAG="$SPECIFIED_TAG"
+              fi
+            fi
+          fi
+
+          # 2. If no new tag from VERSION file, increment based on custom rollover (up to .30 then x.(x+1).1)
+          if [ -z "$NEW_TAG" ]; then
+            if [ -z "$LATEST_TAG" ]; then
+              NEW_TAG="v1.3.0"
+            else
+              VER="${LATEST_TAG#v}"
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$VER"
+              
+              MAJOR=${MAJOR:-1}
+              MINOR=${MINOR:-3}
+              PATCH=${PATCH:-0}
+              
+              if [ "$PATCH" -ge 30 ]; then
+                NEW_MINOR=$((MINOR + 1))
+                NEW_PATCH=1
+                NEW_TAG="v${MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
+              else
+                NEW_PATCH=$((PATCH + 1))
+                NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+              fi
+            fi
           fi
           
           echo "tag=${NEW_TAG}" >> $GITHUB_OUTPUT
