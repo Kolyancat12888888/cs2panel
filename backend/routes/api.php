@@ -66,6 +66,7 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     Route::middleware('permission:users.view')->group(function () {
         Route::get('/admin/users', [UserController::class, 'index']);
         Route::get('/admin/users/{id}', [UserController::class, 'show']);
+        Route::get('/admin/users/{id}/resources', [UserController::class, 'getResourceAccess']);
     });
     Route::middleware('permission:users.create')->group(function () {
         Route::post('/admin/users', [UserController::class, 'store']);
@@ -73,6 +74,7 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     Route::middleware('permission:users.edit')->group(function () {
         Route::put('/admin/users/{id}', [UserController::class, 'update']);
         Route::post('/admin/users/{id}/permissions', [UserController::class, 'updatePermissions']);
+        Route::post('/admin/users/{id}/resources', [UserController::class, 'updateResourceAccess']);
     });
     Route::middleware('permission:users.delete')->group(function () {
         Route::delete('/admin/users/{id}', [UserController::class, 'destroy']);

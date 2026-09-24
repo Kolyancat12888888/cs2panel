@@ -6,6 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\Role;
 use App\Models\Permission;
+use App\Models\Server;
+use App\Models\Agent;
+use App\Models\PluginProject;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
@@ -110,7 +113,13 @@ class UserController extends Controller
 
     public function show($id)
     {
-        $user = User::with(['roles.permissions', 'permissions'])->findOrFail($id);
+        $user = User::with([
+            'roles.permissions', 
+            'permissions',
+            'accessibleServers:id,name,port,status',
+            'accessibleAgents:id,device_name,agent_id,status',
+            'accessibleProjects:id,name,slug,category'
+        ])->findOrFail($id);
 
         return response()->json([
             'success' => true,
@@ -129,6 +138,9 @@ class UserController extends Controller
                     'name' => $p->name,
                     'granted' => (bool)$p->pivot->granted,
                 ]),
+                'accessible_server_ids' => $user->accessibleServers->pluck('id')->toArray(),
+                'accessible_agent_ids' => $user->accessibleAgents->pluck('id')->toArray(),
+                'accessible_project_ids' => $user->accessibleProjects->pluck('id')->toArray(),
                 'all_permissions' => $user->getAllPermissions(),
                 'created_at' => $user->created_at?->toISOString(),
             ],
@@ -207,6 +219,67 @@ class UserController extends Controller
             'success' => true,
             'message' => 'User custom permissions updated.',
             'permissions' => $user->getAllPermissions(),
+        ]);
+    }
+
+    public function getResourceAccess($id)
+    {
+        $user = User::with([
+            'accessibleServers:id,name,port,status',
+            'accessibleAgents:id,device_name,agent_id,status',
+            'accessibleProjects:id,name,slug,category'
+        ])->findOrFail($id);
+
+        $allServers = Server::select('id', 'name', 'port', 'status', 'owner_id')->get();
+        $allAgents = Agent::select('id', 'device_name', 'agent_id', 'status', 'user_id')->get();
+        $allProjects = PluginProject::select('id', 'name', 'slug', 'category', 'user_id', 'is_public')->get();
+
+        return response()->json([
+            'success' => true,
+            'user_id' => $user->id,
+            'user_name' => $user->name,
+            'assigned_server_ids' => $user->accessibleServers->pluck('id')->toArray(),
+            'assigned_agent_ids' => $user->accessibleAgents->pluck('id')->toArray(),
+            'assigned_project_ids' => $user->accessibleProjects->pluck('id')->toArray(),
+            'available_resources' => [
+                'servers' => $allServers,
+                'agents' => $allAgents,
+                'projects' => $allProjects,
+            ]
+        ]);
+    }
+
+    public function updateResourceAccess(Request $request, $id)
+    {
+        $user = User::findOrFail($id);
+
+        $validated = $request->validate([
+            'server_ids' => 'nullable|array',
+            'server_ids.*' => 'exists:servers,id',
+            'agent_ids' => 'nullable|array',
+            'agent_ids.*' => 'exists:agents,id',
+            'project_ids' => 'nullable|array',
+            'project_ids.*' => 'exists:plugin_projects,id',
+        ]);
+
+        if (array_key_exists('server_ids', $validated)) {
+            $user->accessibleServers()->sync($validated['server_ids'] ?? []);
+        }
+
+        if (array_key_exists('agent_ids', $validated)) {
+            $user->accessibleAgents()->sync($validated['agent_ids'] ?? []);
+        }
+
+        if (array_key_exists('project_ids', $validated)) {
+            $user->accessibleProjects()->sync($validated['project_ids'] ?? []);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Granular resource access controls updated successfully.',
+            'assigned_server_ids' => $user->accessibleServers->pluck('id')->toArray(),
+            'assigned_agent_ids' => $user->accessibleAgents->pluck('id')->toArray(),
+            'assigned_project_ids' => $user->accessibleProjects->pluck('id')->toArray(),
         ]);
     }
 

@@ -16,11 +16,42 @@ import {
   Edit3, 
   X,
   Lock,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Bot,
+  Layout,
+  Layers,
+  CheckSquare,
+  Square
 } from 'lucide-react';
 import { fetchApi } from '@/lib/api';
 import { useAuth } from '@/lib/AuthContext';
 import { User, Role, Permission } from '@/lib/types';
+
+interface ResourceItem {
+  id: number;
+  name?: string;
+  device_name?: string;
+  agent_id?: string;
+  port?: number;
+  status?: string;
+  category?: string;
+  slug?: string;
+  owner_id?: number;
+  user_id?: number;
+}
+
+interface ResourceAccessData {
+  user_id: number;
+  user_name: string;
+  assigned_server_ids: number[];
+  assigned_agent_ids: number[];
+  assigned_project_ids: number[];
+  available_resources: {
+    servers: ResourceItem[];
+    agents: ResourceItem[];
+    projects: ResourceItem[];
+  };
+}
 
 export default function UsersAdminPage() {
   const { hasPermission } = useAuth();
@@ -36,6 +67,15 @@ export default function UsersAdminPage() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [permUser, setPermUser] = useState<User | null>(null);
   const [userPermsMap, setUserPermsMap] = useState<Record<number, boolean>>({});
+
+  // Granular Resource Access Modal state
+  const [resourceUser, setResourceUser] = useState<User | null>(null);
+  const [resourceData, setResourceData] = useState<ResourceAccessData | null>(null);
+  const [selectedServers, setSelectedServers] = useState<number[]>([]);
+  const [selectedAgents, setSelectedAgents] = useState<number[]>([]);
+  const [selectedProjects, setSelectedProjects] = useState<number[]>([]);
+  const [resourceLoading, setResourceLoading] = useState(false);
+  const [activeResourceTab, setActiveResourceTab] = useState<'servers' | 'agents' | 'projects'>('servers');
 
   // Form states
   const [formData, setFormData] = useState({
@@ -245,6 +285,50 @@ export default function UsersAdminPage() {
     }
   };
 
+  const handleOpenResources = async (u: User) => {
+    setResourceUser(u);
+    setResourceLoading(true);
+    try {
+      const res = await fetchApi(`/admin/users/${u.id}/resources`);
+      if (res.success) {
+        setResourceData(res);
+        setSelectedServers(res.assigned_server_ids || []);
+        setSelectedAgents(res.assigned_agent_ids || []);
+        setSelectedProjects(res.assigned_project_ids || []);
+      }
+    } catch (err: any) {
+      setMsg({ text: err.message || 'Failed to load user resource access', type: 'error' });
+      setResourceUser(null);
+    } finally {
+      setResourceLoading(false);
+    }
+  };
+
+  const handleSaveResources = async () => {
+    if (!resourceUser) return;
+    setSaving(true);
+    try {
+      const res = await fetchApi(`/admin/users/${resourceUser.id}/resources`, {
+        method: 'POST',
+        body: JSON.stringify({
+          server_ids: selectedServers,
+          agent_ids: selectedAgents,
+          project_ids: selectedProjects,
+        }),
+      });
+
+      if (res.success) {
+        setMsg({ text: 'Granular resource access permissions updated successfully!', type: 'success' });
+        setResourceUser(null);
+        loadData();
+      }
+    } catch (err: any) {
+      setMsg({ text: err.message || 'Error saving resource permissions', type: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (!hasPermission('users.view')) {
     return (
       <div className="p-8 text-center text-cs2-muted">
@@ -429,6 +513,13 @@ export default function UsersAdminPage() {
                         <div className="flex items-center justify-end gap-1.5">
                           {hasPermission('users.edit') && (
                             <>
+                              <button
+                                onClick={() => handleOpenResources(u)}
+                                className="p-2 rounded-lg bg-cs2-card hover:bg-cs2-orange/20 hover:text-cs2-orange text-cs2-muted transition"
+                                title="Manage Accessible Servers, Agents & Projects"
+                              >
+                                <Layers className="w-3.5 h-3.5" />
+                              </button>
                               <button
                                 onClick={() => handleOpenPerms(u)}
                                 className="p-2 rounded-lg bg-cs2-card hover:bg-purple-500/20 hover:text-purple-400 text-cs2-muted transition"
@@ -754,6 +845,295 @@ export default function UsersAdminPage() {
                 className="px-4 py-2 rounded-lg bg-purple-600 text-white font-bold text-sm hover:bg-purple-700 transition"
               >
                 {saving ? 'Saving...' : 'Save Permissions'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GRANULAR RESOURCE ACCESS MODAL (Servers, Agents, Canvas Projects) */}
+      {resourceUser && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-cs2-surface border border-cs2-border rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-cs2-border pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-cs2-orange/20 border border-cs2-orange/30 flex items-center justify-center text-cs2-orange">
+                  <Layers className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Granular Resource Access Controls</h3>
+                  <div className="text-xs text-cs2-muted">
+                    Assign individual access for <span className="text-white font-semibold">{resourceUser.name}</span> ({resourceUser.email})
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => setResourceUser(null)} className="text-cs2-muted hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Resource Category Tabs */}
+            <div className="flex gap-2 border-b border-cs2-border pb-2 text-xs font-semibold">
+              <button
+                onClick={() => setActiveResourceTab('servers')}
+                className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
+                  activeResourceTab === 'servers'
+                    ? 'bg-cs2-orange text-black font-bold'
+                    : 'text-cs2-muted hover:text-white bg-cs2-card'
+                }`}
+              >
+                <Server className="w-3.5 h-3.5" /> Game Servers ({selectedServers.length})
+              </button>
+              <button
+                onClick={() => setActiveResourceTab('agents')}
+                className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
+                  activeResourceTab === 'agents'
+                    ? 'bg-cs2-orange text-black font-bold'
+                    : 'text-cs2-muted hover:text-white bg-cs2-card'
+                }`}
+              >
+                <Bot className="w-3.5 h-3.5" /> AI Client Agents ({selectedAgents.length})
+              </button>
+              <button
+                onClick={() => setActiveResourceTab('projects')}
+                className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
+                  activeResourceTab === 'projects'
+                    ? 'bg-cs2-orange text-black font-bold'
+                    : 'text-cs2-muted hover:text-white bg-cs2-card'
+                }`}
+              >
+                <Layout className="w-3.5 h-3.5" /> Canvas Projects ({selectedProjects.length})
+              </button>
+            </div>
+
+            {/* Resource List / Selection Body */}
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+              {resourceLoading ? (
+                <div className="py-12 text-center text-cs2-muted flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin text-cs2-orange" />
+                  <span>Loading resources...</span>
+                </div>
+              ) : (
+                <>
+                  {/* TAB 1: GAME SERVERS */}
+                  {activeResourceTab === 'servers' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-xs text-cs2-muted">
+                        <span>Select which CS2 game servers this user is permitted to manage and view:</span>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedServers(resourceData?.available_resources.servers.map((s) => s.id) || [])}
+                            className="text-cs2-orange hover:underline text-[11px]"
+                          >
+                            Select All
+                          </button>
+                          <span>•</span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedServers([])}
+                            className="text-cs2-muted hover:text-white text-[11px]"
+                          >
+                            Deselect All
+                          </button>
+                        </div>
+                      </div>
+
+                      {resourceData?.available_resources.servers.length === 0 ? (
+                        <div className="p-8 text-center text-xs text-cs2-muted bg-cs2-card rounded-xl border border-cs2-border">
+                          No game servers created yet.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {resourceData?.available_resources.servers.map((s) => {
+                            const isChecked = selectedServers.includes(s.id);
+                            return (
+                              <label
+                                key={s.id}
+                                className={`p-3 rounded-xl border text-xs flex items-start gap-3 cursor-pointer transition ${
+                                  isChecked
+                                    ? 'bg-cs2-orange/10 border-cs2-orange/40 text-white'
+                                    : 'bg-cs2-card border-cs2-border text-cs2-muted hover:text-white'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedServers([...selectedServers, s.id]);
+                                    } else {
+                                      setSelectedServers(selectedServers.filter((id) => id !== s.id));
+                                    }
+                                  }}
+                                  className="mt-0.5 rounded bg-cs2-card border-cs2-border text-cs2-orange focus:ring-cs2-orange"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-semibold text-white truncate">{s.name}</div>
+                                  <div className="text-[11px] text-cs2-muted font-mono mt-0.5">
+                                    Port: {s.port || 27015} • Status: <span className="text-cs2-green">{s.status || 'offline'}</span>
+                                  </div>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TAB 2: AI CLIENT AGENTS */}
+                  {activeResourceTab === 'agents' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-xs text-cs2-muted">
+                        <span>Select which AI Client compute nodes/agents this user can dispatch tasks to:</span>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedAgents(resourceData?.available_resources.agents.map((a) => a.id) || [])}
+                            className="text-cs2-orange hover:underline text-[11px]"
+                          >
+                            Select All
+                          </button>
+                          <span>•</span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedAgents([])}
+                            className="text-cs2-muted hover:text-white text-[11px]"
+                          >
+                            Deselect All
+                          </button>
+                        </div>
+                      </div>
+
+                      {resourceData?.available_resources.agents.length === 0 ? (
+                        <div className="p-8 text-center text-xs text-cs2-muted bg-cs2-card rounded-xl border border-cs2-border">
+                          No client agents registered yet.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {resourceData?.available_resources.agents.map((a) => {
+                            const isChecked = selectedAgents.includes(a.id);
+                            return (
+                              <label
+                                key={a.id}
+                                className={`p-3 rounded-xl border text-xs flex items-start gap-3 cursor-pointer transition ${
+                                  isChecked
+                                    ? 'bg-cs2-orange/10 border-cs2-orange/40 text-white'
+                                    : 'bg-cs2-card border-cs2-border text-cs2-muted hover:text-white'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedAgents([...selectedAgents, a.id]);
+                                    } else {
+                                      setSelectedAgents(selectedAgents.filter((id) => id !== a.id));
+                                    }
+                                  }}
+                                  className="mt-0.5 rounded bg-cs2-card border-cs2-border text-cs2-orange focus:ring-cs2-orange"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-semibold text-white truncate">{a.device_name}</div>
+                                  <div className="text-[11px] text-cs2-muted font-mono mt-0.5">
+                                    ID: {a.agent_id} • Status: <span className="text-cs2-green">{a.status}</span>
+                                  </div>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TAB 3: CANVAS / PLUGIN PROJECTS */}
+                  {activeResourceTab === 'projects' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-xs text-cs2-muted">
+                        <span>Select which Visual Plugin Studio (.cs2graph) projects this user has access to:</span>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedProjects(resourceData?.available_resources.projects.map((p) => p.id) || [])}
+                            className="text-cs2-orange hover:underline text-[11px]"
+                          >
+                            Select All
+                          </button>
+                          <span>•</span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedProjects([])}
+                            className="text-cs2-muted hover:text-white text-[11px]"
+                          >
+                            Deselect All
+                          </button>
+                        </div>
+                      </div>
+
+                      {resourceData?.available_resources.projects.length === 0 ? (
+                        <div className="p-8 text-center text-xs text-cs2-muted bg-cs2-card rounded-xl border border-cs2-border">
+                          No canvas plugin projects created yet.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {resourceData?.available_resources.projects.map((p) => {
+                            const isChecked = selectedProjects.includes(p.id);
+                            return (
+                              <label
+                                key={p.id}
+                                className={`p-3 rounded-xl border text-xs flex items-start gap-3 cursor-pointer transition ${
+                                  isChecked
+                                    ? 'bg-cs2-orange/10 border-cs2-orange/40 text-white'
+                                    : 'bg-cs2-card border-cs2-border text-cs2-muted hover:text-white'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedProjects([...selectedProjects, p.id]);
+                                    } else {
+                                      setSelectedProjects(selectedProjects.filter((id) => id !== p.id));
+                                    }
+                                  }}
+                                  className="mt-0.5 rounded bg-cs2-card border-cs2-border text-cs2-orange focus:ring-cs2-orange"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-semibold text-white truncate">{p.name}</div>
+                                  <div className="text-[11px] text-cs2-muted font-mono mt-0.5">
+                                    Category: {p.category}
+                                  </div>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-cs2-border pt-3">
+              <button
+                type="button"
+                onClick={() => setResourceUser(null)}
+                className="px-4 py-2 rounded-lg bg-cs2-card border border-cs2-border text-cs2-muted hover:text-white text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveResources}
+                disabled={saving || resourceLoading}
+                className="px-4 py-2 rounded-lg bg-cs2-orange text-black font-bold text-sm hover:bg-cs2-orange/90 transition shadow-lg shadow-cs2-orange/20"
+              >
+                {saving ? 'Saving...' : 'Save Resource Access'}
               </button>
             </div>
           </div>

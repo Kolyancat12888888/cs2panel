@@ -43,6 +43,21 @@ class User extends Authenticatable
         return $this->hasMany(Server::class, 'owner_id');
     }
 
+    public function accessibleServers()
+    {
+        return $this->belongsToMany(Server::class, 'user_server_access');
+    }
+
+    public function accessibleAgents()
+    {
+        return $this->belongsToMany(Agent::class, 'user_agent_access');
+    }
+
+    public function accessibleProjects()
+    {
+        return $this->belongsToMany(PluginProject::class, 'user_project_access', 'user_id', 'project_id');
+    }
+
     public function tickets()
     {
         return $this->hasMany(Ticket::class);
@@ -165,13 +180,42 @@ class User extends Authenticatable
         return $this;
     }
 
-    public function removeRole(string|Role $role): self
+    public function canAccessServer(int|Server $server): bool
     {
-        $r = is_string($role) ? Role::where('slug', $role)->first() : $role;
-        if ($r) {
-            $this->roles()->detach($r->id);
-            $this->flushPermissionsCache();
+        if ($this->isAdmin()) {
+            return true;
         }
-        return $this;
+        $serverId = $server instanceof Server ? $server->id : $server;
+        $serverModel = $server instanceof Server ? $server : Server::find($serverId);
+        if ($serverModel && $serverModel->owner_id === $this->id) {
+            return true;
+        }
+        return $this->accessibleServers()->where('servers.id', $serverId)->exists();
+    }
+
+    public function canAccessAgent(int|Agent $agent): bool
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+        $agentId = $agent instanceof Agent ? $agent->id : $agent;
+        $agentModel = $agent instanceof Agent ? $agent : Agent::find($agentId);
+        if ($agentModel && $agentModel->user_id === $this->id) {
+            return true;
+        }
+        return $this->accessibleAgents()->where('agents.id', $agentId)->exists();
+    }
+
+    public function canAccessProject(int|PluginProject $project): bool
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+        $projectId = $project instanceof PluginProject ? $project->id : $project;
+        $projModel = $project instanceof PluginProject ? $project : PluginProject::find($projectId);
+        if ($projModel && ($projModel->user_id === $this->id || $projModel->is_public)) {
+            return true;
+        }
+        return $this->accessibleProjects()->where('plugin_projects.id', $projectId)->exists();
     }
 }

@@ -46,6 +46,11 @@ class PluginProject extends Model
         return $this->belongsTo(User::class);
     }
 
+    public function permittedUsers()
+    {
+        return $this->belongsToMany(User::class, 'user_project_access', 'project_id', 'user_id');
+    }
+
     public function versions()
     {
         return $this->hasMany(GraphVersion::class)->latest();

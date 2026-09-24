@@ -138,7 +138,12 @@ class AgentGatewayController extends Controller
         $query = Agent::query();
 
         if (!$user->isAdmin()) {
-            $query->where('user_id', $user->id);
+            $query->where(function ($q) use ($user) {
+                $q->where('user_id', $user->id)
+                  ->orWhereHas('permittedUsers', function ($sub) use ($user) {
+                      $sub->where('users.id', $user->id);
+                  });
+            });
         }
 
         return response()->json($query->latest()->get());
@@ -168,13 +173,12 @@ class AgentGatewayController extends Controller
     public function destroy(Request $request, $id)
     {
         $user = $request->user();
-        $query = Agent::where('id', $id);
+        $agent = Agent::findOrFail($id);
 
-        if (!$user->isAdmin()) {
-            $query->where('user_id', $user->id);
+        if (!$user->canAccessAgent($agent)) {
+            abort(403, 'Unauthorized to delete this agent.');
         }
 
-        $agent = $query->firstOrFail();
         $agent->delete();
 
         return response()->json(['message' => 'Agent removed successfully']);

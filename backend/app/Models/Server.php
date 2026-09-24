@@ -75,6 +75,11 @@ class Server extends Model
         return $this->belongsTo(User::class, 'owner_id');
     }
 
+    public function permittedUsers()
+    {
+        return $this->belongsToMany(User::class, 'user_server_access');
+    }
+
     public function bans()
     {
         return $this->hasMany(Ban::class);

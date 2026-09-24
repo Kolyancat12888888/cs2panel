@@ -34,6 +34,11 @@ class Agent extends Model
         return $this->belongsTo(User::class);
     }
 
+    public function permittedUsers()
+    {
+        return $this->belongsToMany(User::class, 'user_agent_access');
+    }
+
     public function isOnline(): bool
     {
         return $this->status !== 'offline' && $this->last_heartbeat_at && $this->last_heartbeat_at->diffInSeconds(now()) < 30;

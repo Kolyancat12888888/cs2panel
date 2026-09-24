@@ -30,7 +30,13 @@ class PluginStudioController extends Controller
         $query = PluginProject::withCount('versions');
 
         if (!$user->isAdmin()) {
-            $query->where('user_id', $user->id);
+            $query->where(function ($q) use ($user) {
+                $q->where('user_id', $user->id)
+                  ->orWhere('is_public', true)
+                  ->orWhereHas('permittedUsers', function ($sub) use ($user) {
+                      $sub->where('users.id', $user->id);
+                  });
+            });
         }
 
         return response()->json($query->latest()->get());
@@ -134,12 +140,18 @@ class PluginStudioController extends Controller
     public function show($id, Request $request)
     {
         $project = PluginProject::with('versions')->findOrFail($id);
+        if (!$request->user()->canAccessProject($project)) {
+            abort(403, 'Unauthorized access to this canvas project.');
+        }
         return response()->json($project);
     }
 
     public function update($id, Request $request)
     {
         $project = PluginProject::findOrFail($id);
+        if (!$request->user()->canAccessProject($project)) {
+            abort(403, 'Unauthorized to edit this canvas project.');
+        }
         $data = $request->validate([
             'graph_json' => 'required|array',
             'commit_message' => 'nullable|string',

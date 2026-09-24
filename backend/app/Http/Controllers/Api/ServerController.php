@@ -25,7 +25,12 @@ class ServerController extends Controller
         $query = Server::with(['node', 'owner']);
 
         if (!$user->isAdmin()) {
-            $query->where('owner_id', $user->id);
+            $query->where(function ($q) use ($user) {
+                $q->where('owner_id', $user->id)
+                  ->orWhereHas('permittedUsers', function ($sub) use ($user) {
+                      $sub->where('users.id', $user->id);
+                  });
+            });
         }
 
         return response()->json($query->latest()->get());
@@ -154,7 +159,7 @@ class ServerController extends Controller
 
     protected function authorizeAccess($user, Server $server)
     {
-        if (!$user->isAdmin() && $server->owner_id !== $user->id) {
+        if (!$user->canAccessServer($server)) {
             abort(403, 'Unauthorized access to this server.');
         }
     }
